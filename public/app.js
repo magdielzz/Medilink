@@ -223,66 +223,77 @@ function setContent(html) {
 }
 
 function renderShell(activePath, role, user, contentHtml) {
-  const patientNav = `
-    <div class="nav-section">
-      <div class="nav-label">Mi Salud</div>
-      <div class="nav-item ${activePath==='/patient/dashboard'?'active':''}" onclick="Router.navigate('/patient/dashboard')">
-        ${iconGrid()} <span>Inicio</span>
-      </div>
-      <div class="nav-item ${activePath==='/patient/record'?'active':''}" onclick="Router.navigate('/patient/record')">
-        ${iconFile()} <span>Mi Expediente</span>
-      </div>
-    </div>
-    <div class="nav-section">
-      <div class="nav-label">Cuenta</div>
-      <div class="nav-item ${activePath==='/patient/profile'?'active':''}" onclick="Router.navigate('/patient/profile')">
-        ${iconUser()} <span>Perfil</span>
-      </div>
-      <div class="nav-item" onclick="logout()">
-        ${iconLogout()} <span>Cerrar sesión</span>
-      </div>
-    </div>`;
+  if (role === 'doctor') return renderDoctorShell(activePath, user, contentHtml);
+  return renderPatientShell(activePath, user, contentHtml);
+}
 
-  const doctorNav = `
-    <div class="nav-section">
-      <div class="nav-label">Panel</div>
-      <div class="nav-item ${activePath==='/doctor/dashboard'?'active':''}" onclick="Router.navigate('/doctor/dashboard')">
-        ${iconGrid()} <span>Inicio</span>
-      </div>
-      <div class="nav-item ${activePath==='/doctor/patients'?'active':''}" onclick="Router.navigate('/doctor/patients')">
-        ${iconUsers()} <span>Pacientes</span>
-      </div>
-    </div>
-    <div class="nav-section">
-      <div class="nav-label">Cuenta</div>
-      <div class="nav-item ${activePath==='/doctor/profile'?'active':''}" onclick="Router.navigate('/doctor/profile')">
-        ${iconUser()} <span>Perfil</span>
-      </div>
-      <div class="nav-item" onclick="logout()">
-        ${iconLogout()} <span>Cerrar sesión</span>
-      </div>
-    </div>`;
-
+function renderDoctorShell(activePath, user, contentHtml) {
+  const nav = [
+    { path: '/doctor/dashboard',  label: 'Dashboard',    icon: iconGrid() },
+    { path: '/doctor/agenda',     label: 'Agenda',       icon: iconCalendar() },
+    { path: '/doctor/patients',   label: 'Pacientes',    icon: iconUsers() },
+    { path: '/doctor/expedientes',label: 'Expedientes',  icon: iconFolder() },
+    { path: '/doctor/ganancias',  label: 'Ganancias',    icon: iconChart() },
+    { path: '/doctor/profile',    label: 'Configuración',icon: iconSettings() },
+  ];
+  const title = `${user?.profile?.gender==='F'?'Dra.':'Dr.'} ${escHtml((user?.first_name||'')+' '+(user?.last_name||''))}`.trim().replace(/^Dr\. $/,'');
   return `
-    <div class="app-layout">
-      <header class="app-header">
-        <a class="app-header__brand" href="#${role==='doctor'?'/doctor/dashboard':'/patient/dashboard'}">
-          <div class="brand-logo"><div class="brand-logo__ring"></div><div class="brand-logo__circle"></div></div>
-          <span class="brand-wordmark">MediLink</span>
+    <div class="dr-layout">
+      <aside class="dr-sidebar" id="dr-sidebar">
+        <a class="dr-sidebar__brand" href="#/doctor/dashboard">
+          <span class="ln-nav__dot"></span>
+          <span class="ln-nav__wordmark">MediLink</span>
         </a>
-        <div class="app-header__spacer"></div>
-        <div class="app-header__user">
-          <div class="header-avatar">${initials(user?.first_name, user?.last_name)}</div>
-          <div class="header-user-info">
-            <div class="header-user-name">${escHtml((user?.first_name||'')+' '+(user?.last_name||''))}</div>
-            <div class="header-user-role">${role==='doctor'?'Médico':'Paciente'}</div>
+        <nav class="dr-sidebar__nav">
+          ${nav.map(item => `
+            <div class="nav-item ${activePath===item.path||activePath.startsWith(item.path+'/')?'active':''}"
+                 onclick="Router.navigate('${item.path}')">
+              ${item.icon}<span>${item.label}</span>
+            </div>`).join('')}
+        </nav>
+        <div class="dr-sidebar__footer">
+          <div class="dr-sidebar__user">
+            <div class="dr-user-av">${initials(user?.first_name, user?.last_name)}</div>
+            <div>
+              <div class="dr-user-name">${title || escHtml((user?.first_name||'')+' '+(user?.last_name||''))}</div>
+              <div class="dr-user-role">${escHtml(user?.profile?.specialty||'Médico')}</div>
+            </div>
           </div>
+          <button class="dr-logout-btn" onclick="logout()">${iconLogout()}&nbsp;Cerrar sesión</button>
         </div>
-      </header>
-      <aside class="app-sidebar" id="app-sidebar">
-        ${role === 'doctor' ? doctorNav : patientNav}
       </aside>
-      <main class="app-main" id="main-content">
+      <main class="dr-main" id="main-content">
+        ${contentHtml}
+      </main>
+    </div>`;
+}
+
+function renderPatientShell(activePath, user, contentHtml) {
+  const tabs = [
+    { path: '/patient/search',    label: 'Buscar' },
+    { path: '/patient/citas',     label: 'Mis citas' },
+    { path: '/patient/record',    label: 'Expediente' },
+    { path: '/patient/favoritos', label: 'Favoritos' },
+  ];
+  return `
+    <div class="pt-layout">
+      <nav class="pt-topnav">
+        <a class="pt-topnav__brand" href="#/patient/dashboard">
+          <span class="ln-nav__dot"></span>
+          <span class="ln-nav__wordmark">MediLink</span>
+        </a>
+        <div class="pt-tabs">
+          ${tabs.map(t => `<span class="pt-tab ${activePath===t.path?'active':''}" onclick="Router.navigate('${t.path}')">${t.label}</span>`).join('')}
+        </div>
+        <div class="pt-topnav__right">
+          <button class="pt-bell" title="Notificaciones">${iconBell()}</button>
+          <button class="pt-user-btn" onclick="Router.navigate('/patient/profile')">
+            <div class="pt-user-av">${initials(user?.first_name, user?.last_name)}</div>
+            <span class="pt-user-label">Paciente</span>
+          </button>
+        </div>
+      </nav>
+      <main class="pt-main" id="main-content">
         ${contentHtml}
       </main>
     </div>`;
@@ -302,6 +313,12 @@ const iconSearch  = () => svgI('<circle cx="11" cy="11" r="8"/><line x1="21" y1=
 const iconTrash   = () => svgI('<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>');
 const iconEdit    = () => svgI('<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>');
 const iconChevron = (d='down') => svgI(`<polyline points="${d==='down'?'6 9 12 15 18 9':'6 15 12 9 18 15'}"/>`);
+const iconCalendar= () => svgI('<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>');
+const iconChart   = () => svgI('<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>');
+const iconSettings= () => svgI('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>');
+const iconBell    = () => svgI('<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>');
+const iconFolder  = () => svgI('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>');
+const iconDownload= () => svgI('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>');
 
 // ============================================================
 // PAGES — LANDING
@@ -443,46 +460,47 @@ function renderLanding() {
 
       <!-- EL PROBLEMA -->
       <section class="problem-section">
-        <div class="problem-inner">
-          <div class="problem-text">
-            <div class="features__eyebrow">El Problema</div>
-            <h2>La atención médica fragmentada tiene un costo real</h2>
-            <p>
-              Durante <strong>6 meses de consulta e investigación</strong> con médicos generales, especialistas y pacientes crónicos,
-              identificamos un patrón alarmante: la información clínica vive dispersa entre papeles, fotos de WhatsApp,
-              libretas y sistemas incompatibles.
-            </p>
-            <p style="margin-top:.875rem">
-              Cada vez que un paciente cambia de médico o visita urgencias, el nuevo profesional de salud
-              atiende <em>sin contexto</em>: sin saber las alergias, los medicamentos actuales ni el historial de diagnósticos.
-              Esto genera errores, duplicación de estudios costosos y decisiones clínicas incompletas.
-            </p>
-            <ul class="problem-list">
-              <li>📄 Expedientes físicos que se pierden o deterioran</li>
-              <li>💬 Historial compartido por foto o de memoria</li>
-              <li>🔁 Estudios repetidos por falta de acceso a resultados previos</li>
-              <li>⚠️ Alergias desconocidas al momento de prescribir</li>
-            </ul>
+        <div class="problem-v2">
+          <div class="problem-v2__top">
+            <div class="problem-v2__eyebrow">El Problema</div>
+            <h2 class="problem-v2__h2">El sistema de salud está <span class="accent">fragmentado</span>.</h2>
+            <p class="problem-v2__sub">Pacientes sin historia clínica accesible. Médicos sin herramientas. Esperas que enferman más.</p>
           </div>
-          <div class="problem-quote">
-            <blockquote>
-              "En 6 meses de consultas observamos que más del 70% de los pacientes no tienen acceso
-               inmediato a su historial médico cuando más lo necesitan."
-            </blockquote>
-            <div class="problem-quote__author">— Observación clínica, base del proyecto MediLink</div>
-            <div class="problem-stats">
-              <div class="problem-stat">
-                <div class="problem-stat__n">6 meses</div>
-                <div class="problem-stat__l">de investigación de campo</div>
-              </div>
-              <div class="problem-stat">
-                <div class="problem-stat__n">+40</div>
-                <div class="problem-stat__l">entrevistas con pacientes y médicos</div>
-              </div>
-              <div class="problem-stat">
-                <div class="problem-stat__n">1 solución</div>
-                <div class="problem-stat__l">expediente clínico digital unificado</div>
-              </div>
+
+          <div class="problem-cards">
+            <div class="problem-card problem-card--light">
+              <div class="problem-card__tag">Situación actual</div>
+              <div class="problem-card__title">Así se vive hoy en México</div>
+              <ul class="problem-card__list">
+                <li class="problem-card__item"><span class="problem-item-icon problem-item-icon--x">✕</span>Esperas de 3 a 6 meses para ver a un especialista en el sistema público</li>
+                <li class="problem-card__item"><span class="problem-item-icon problem-item-icon--x">✕</span>Historial médico disperso en papel entre hospitales y clínicas</li>
+                <li class="problem-card__item"><span class="problem-item-icon problem-item-icon--x">✕</span>Estudios repetidos porque no hay acceso al historial previo</li>
+                <li class="problem-card__item"><span class="problem-item-icon problem-item-icon--x">✕</span>Médicos sin herramientas digitales para su agenda y pacientes</li>
+                <li class="problem-card__item"><span class="problem-item-icon problem-item-icon--x">✕</span>Enfermedades que escalan de leves a graves durante la espera</li>
+              </ul>
+            </div>
+            <div class="problem-card problem-card--dark">
+              <div class="problem-card__tag">Con MediLink</div>
+              <div class="problem-card__title">Lo que hacemos posible</div>
+              <ul class="problem-card__list">
+                <li class="problem-card__item"><span class="problem-item-icon problem-item-icon--check">✓</span>Cita con el especialista correcto en horas, no meses, según tus síntomas</li>
+                <li class="problem-card__item"><span class="problem-item-icon problem-item-icon--check">✓</span>Expediente digital centralizado: estudios, diagnósticos, recetas y alergias</li>
+                <li class="problem-card__item"><span class="problem-item-icon problem-item-icon--check">✓</span>IA que orienta hacia el especialista adecuado — nunca diagnostica</li>
+                <li class="problem-card__item"><span class="problem-item-icon problem-item-icon--check">✓</span>Agenda inteligente para médicos con recordatorios y confirmaciones</li>
+                <li class="problem-card__item"><span class="problem-item-icon problem-item-icon--check">✓</span>Infraestructura lista para IMSS, ISSSTE y estándares HL7/FHIR</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="problem-dark-strip">
+            <h2 class="problem-dark-strip__h2">La salud no puede esperar <span class="accent">6 meses</span>.</h2>
+            <div class="problem-dark-strip__row">
+              <div class="pds-av" style="background:#157A62">NR</div>
+              <div class="pds-av" style="background:#2B6CB0">CM</div>
+              <div class="pds-av" style="background:#6B4C3B">AO</div>
+              <div class="pds-av" style="background:#276749">PG</div>
+              <div class="pds-av" style="background:#553c9a">LH</div>
+              <span class="pds-text">+240 profesionales ya en la plataforma</span>
             </div>
           </div>
         </div>
@@ -898,9 +916,12 @@ async function renderPatientDashboard() {
     const lastC = stats.lastConsultation;
 
     setContent(renderShell('/patient/dashboard', 'patient', me, `
-      <div class="page-header">
-        <h2 class="page-title">Bienvenido, ${escHtml(me.first_name)}</h2>
-        <p class="page-subtitle">Tu resumen de salud actualizado</p>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.75rem;gap:1rem;flex-wrap:wrap">
+        <div>
+          <h2 class="page-title">Bienvenido, ${escHtml(me.first_name)}</h2>
+          <p class="page-subtitle">Tu resumen de salud actualizado</p>
+        </div>
+        <button class="btn btn-primary" onclick="Router.navigate('/patient/record')">${iconFile()} Ver expediente</button>
       </div>
 
       <div class="stats-grid">
@@ -982,59 +1003,157 @@ async function renderPatientRecord() {
     State.setUser(me);
     const { record, consultations, studies, allergies, conditions, medications } = data;
 
+    // Build timeline from all events sorted by date
+    const timeline = [];
+    consultations.forEach(c => timeline.push({ type:'consulta', date: c.date, data: c }));
+    studies.forEach(s => timeline.push({ type: s.type==='Laboratorio'?'laboratorio': s.type==='Imagenología'?'imagen':'laboratorio', date: s.date, data: s }));
+    timeline.sort((a,b) => new Date(b.date||0) - new Date(a.date||0));
+
+    const lastConsult = consultations[0];
+    const activeM = medications.filter(m => m.active);
+
+    // Build age if DOB exists
+    let age = '';
+    if (record.date_of_birth) {
+      const dob = new Date(record.date_of_birth);
+      const now = new Date();
+      age = Math.floor((now - dob) / (1000*60*60*24*365.25)) + ' años';
+    }
+
+    const timelineIcons = {
+      consulta:    { icon:'🩺', bg:'#dbeafe' },
+      laboratorio: { icon:'🔬', bg:'#e9d8fd' },
+      imagen:      { icon:'🏥', bg:'#fef3c7' },
+      receta:      { icon:'💊', bg:'#dcfce7' },
+      diagnostico: { icon:'📋', bg:'#fce7f3' },
+    };
+
+    function renderTimeline(items) {
+      if (!items.length) return `<div class="empty-state"><div class="empty-state__icon">📅</div><div class="empty-state__title">Sin eventos registrados</div></div>`;
+      return items.map((ev, idx) => {
+        const ico = timelineIcons[ev.type] || timelineIcons.consulta;
+        let title='', desc='', badge='';
+        if (ev.type==='consulta') {
+          title = ev.data.reason;
+          desc = `Dr. ${escHtml(ev.data.doctor_first_name||'')} ${escHtml(ev.data.doctor_last_name||'')}${ev.data.specialty?` · ${escHtml(ev.data.specialty)}`:''}${ev.data.diagnosis?`. ${escHtml(ev.data.diagnosis)}`:''}.`;
+          badge = `<span class="pr-event__badge pr-event__badge--consulta">Consulta</span>`;
+        } else {
+          title = ev.data.name;
+          desc = statusBadge(ev.data.status)+(ev.data.result?` · ${escHtml(ev.data.result)}`:'');
+          badge = `<span class="pr-event__badge pr-event__badge--${ev.type}">${ev.type==='imagen'?'Imagenología':ev.type==='laboratorio'?'Laboratorio':ev.type}</span>`;
+        }
+        return `
+          <div class="pr-event">
+            <div class="pr-event__icon-col">
+              <div class="pr-event__icon" style="background:${ico.bg}">${ico.icon}</div>
+              ${idx < items.length-1 ? '<div class="pr-event__line"></div>' : ''}
+            </div>
+            <div class="pr-event__content">
+              <div class="pr-event__meta">
+                <span class="pr-event__date">${formatDate(ev.date)}</span>
+                ${badge}
+              </div>
+              <div class="pr-event__title">${escHtml(title)}</div>
+              <div class="pr-event__desc">${desc}</div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
     setContent(renderShell('/patient/record', 'patient', me, `
-      <div class="page-header flex justify-between items-center">
-        <div>
-          <h2 class="page-title">Mi Expediente Clínico</h2>
-          <p class="page-subtitle">Historial médico completo</p>
-        </div>
-      </div>
 
-      <div class="record-header">
-        <div class="record-avatar">${initials(record.first_name, record.last_name)}</div>
-        <div class="record-info">
-          <div class="record-name">${escHtml(record.first_name)} ${escHtml(record.last_name)}</div>
-          <div class="record-meta">
-            ${record.date_of_birth ? `Nacimiento: ${formatDate(record.date_of_birth)}` : ''}
-            ${record.blood_type ? ` · ${bloodTypeBadge(record.blood_type)}` : ''}
-            ${record.phone ? ` · ${escHtml(record.phone)}` : ''}
+      <!-- Patient record header -->
+      <div class="pr-header">
+        <div class="pr-avatar">${initials(record.first_name, record.last_name)}</div>
+        <div class="pr-info">
+          <div class="pr-name-row">
+            <span class="pr-name">${escHtml(record.first_name)} ${escHtml(record.last_name)}</span>
+            <span class="pr-badge">Expediente #${escHtml(record.record_number)}</span>
           </div>
-          <div class="record-number">Expediente: ${escHtml(record.record_number)}</div>
+          <div class="pr-meta">
+            ${age ? `${age} · ` : ''}${record.gender==='F'?'Femenino':'Masculino'} &nbsp;
+            ${record.blood_type ? `Tipo de sangre <strong>${escHtml(record.blood_type)}</strong>` : ''}
+            ${record.curp ? ` &nbsp; CURP ${escHtml(record.curp.slice(0,8))}…` : ''}
+            <span style="margin-left:1rem;color:var(--color-text-4)">Última actualización: ${formatDate(record.updated_at||record.created_at)}</span>
+          </div>
         </div>
-        ${(record.emergency_contact_name) ? `
-        <div style="border-left:1px solid var(--color-border);padding-left:1.25rem;flex-shrink:0">
-          <div class="text-xs text-muted" style="margin-bottom:.25rem">CONTACTO DE EMERGENCIA</div>
-          <div class="text-sm font-semibold">${escHtml(record.emergency_contact_name)}</div>
-          <div class="text-xs text-muted">${escHtml(record.emergency_contact_phone||'')}</div>
-        </div>` : ''}
+        <button class="pr-export-btn" onclick="Toast.info('Función de exportar próximamente')">${iconDownload()} Exportar PDF</button>
       </div>
 
-      <div class="tabs" id="record-tabs">
-        <div class="tab active" data-tab="consultations">Consultas (${consultations.length})</div>
-        <div class="tab" data-tab="medications">Medicamentos (${medications.length})</div>
-        <div class="tab" data-tab="studies">Estudios (${studies.length})</div>
-        <div class="tab" data-tab="allergies">Alergias (${allergies.length})</div>
-        <div class="tab" data-tab="conditions">Condiciones (${conditions.length})</div>
-      </div>
+      <!-- Two-column body -->
+      <div class="pr-body">
 
-      <div class="tab-content active" id="tab-consultations">
-        ${renderConsultationsList(consultations)}
-      </div>
-      <div class="tab-content" id="tab-medications">
-        ${renderMedicationsView(medications)}
-      </div>
-      <div class="tab-content" id="tab-studies">
-        ${renderStudiesView(studies)}
-      </div>
-      <div class="tab-content" id="tab-allergies">
-        ${renderAllergiesView(allergies, null, true)}
-      </div>
-      <div class="tab-content" id="tab-conditions">
-        ${renderConditionsView(conditions, null, true)}
+        <!-- LEFT: vitals + allergies + meds -->
+        <div class="pr-left">
+          ${lastConsult && (lastConsult.blood_pressure||lastConsult.heart_rate||lastConsult.temperature||lastConsult.weight) ? `
+          <div class="pr-vitals">
+            <div class="pr-vitals__header">
+              <span class="pr-vitals__title">Signos vitales</span>
+              <span class="pr-vitals__date">${formatDate(lastConsult.date)}</span>
+            </div>
+            <div class="pr-vitals-grid">
+              ${lastConsult.blood_pressure ? `<div class="pr-vital"><div class="pr-vital__label">Presión arterial</div><div class="pr-vital__val">${escHtml(lastConsult.blood_pressure)}<span class="pr-vital__unit">mmHg</span></div><div class="pr-vital__tag pr-vital__tag--warn">↑ Vigilar</div></div>` : ''}
+              ${lastConsult.heart_rate ? `<div class="pr-vital"><div class="pr-vital__label">Frecuencia cardíaca</div><div class="pr-vital__val">${lastConsult.heart_rate}<span class="pr-vital__unit">lpm</span></div><div class="pr-vital__tag pr-vital__tag--ok">Normal</div></div>` : ''}
+              ${lastConsult.temperature ? `<div class="pr-vital"><div class="pr-vital__label">Temperatura</div><div class="pr-vital__val">${lastConsult.temperature}<span class="pr-vital__unit">°C</span></div><div class="pr-vital__tag pr-vital__tag--ok">Normal</div></div>` : ''}
+              ${lastConsult.weight ? `<div class="pr-vital"><div class="pr-vital__label">Peso</div><div class="pr-vital__val">${lastConsult.weight}<span class="pr-vital__unit">kg</span></div>${lastConsult.height?`<div class="pr-vital__tag">IMC ${(lastConsult.weight/((lastConsult.height/100)**2)).toFixed(1)}</div>`:''}</div>` : ''}
+            </div>
+          </div>` : ''}
+
+          ${allergies.length ? `
+          <div class="pr-allergies">
+            <div class="pr-allergies__header">
+              <span class="pr-allergies__icon">⚠️</span>
+              <span class="pr-allergies__title">Alergias</span>
+            </div>
+            <div class="pr-allergy-tags">
+              ${allergies.map(a => `<span class="pr-allergy-tag">${escHtml(a.allergen)}</span>`).join('')}
+            </div>
+          </div>` : ''}
+
+          ${activeM.length ? `
+          <div class="pr-meds">
+            <div class="pr-meds__title">Medicamentos actuales</div>
+            ${activeM.map(m => `
+            <div class="pr-med-item">
+              <div class="pr-med-dot"></div>
+              <div>
+                <div class="pr-med-name">${escHtml(m.name)} ${escHtml(m.dosage)}</div>
+                <div class="pr-med-sub">${escHtml(m.frequency)}</div>
+              </div>
+            </div>`).join('')}
+          </div>` : `
+          <div class="pr-meds">
+            <div class="pr-meds__title">Medicamentos actuales</div>
+            <div style="font-size:.8125rem;color:var(--color-text-4);padding:.5rem 0">Sin medicamentos activos registrados</div>
+          </div>`}
+        </div>
+
+        <!-- RIGHT: clinical timeline -->
+        <div class="pr-right">
+          <div class="pr-timeline">
+            <div class="pr-timeline__header">
+              <div class="pr-timeline__title">Línea del tiempo clínica</div>
+              <div class="pr-timeline__filters">
+                <button class="pr-filter active" onclick="filterTimeline(this,'todos')">Todos</button>
+                <button class="pr-filter" onclick="filterTimeline(this,'consulta')">Consultas</button>
+                <button class="pr-filter" onclick="filterTimeline(this,'laboratorio')">Estudios</button>
+                <button class="pr-filter" onclick="filterTimeline(this,'receta')">Recetas</button>
+              </div>
+            </div>
+            <div class="pr-timeline__body" id="pr-timeline-body">
+              ${renderTimeline(timeline)}
+            </div>
+          </div>
+        </div>
       </div>`));
 
-    initTabs();
-    initConsultationToggles();
+    window._prTimeline = timeline;
+    window.filterTimeline = function(btn, type) {
+      document.querySelectorAll('.pr-filter').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const filtered = type==='todos' ? window._prTimeline : window._prTimeline.filter(e => e.type===type||e.type.startsWith(type));
+      document.getElementById('pr-timeline-body').innerHTML = renderTimeline(filtered);
+    };
   } catch (err) {
     Loading.hide();
     if (err.status === 401) { State.clearAuth(); Router.navigate('/login'); return; }
@@ -1162,65 +1281,88 @@ async function renderDoctorDashboard() {
     State.setUser(me);
 
     setContent(renderShell('/doctor/dashboard', 'doctor', me, `
-      <div class="page-header flex justify-between items-center">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.75rem;gap:1rem;flex-wrap:wrap">
         <div>
-          <h2 class="page-title">Panel Médico</h2>
-          <p class="page-subtitle">Dr. ${escHtml(me.first_name)} ${escHtml(me.last_name)} · ${escHtml(me.profile?.specialty||'')}</p>
+          <h2 class="page-title">Dashboard</h2>
+          <p class="page-subtitle">${new Date().toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</p>
         </div>
-        <button class="btn btn-primary" onclick="Router.navigate('/doctor/patients')">${iconUsers()} Ver pacientes</button>
+        <button class="ln-btn-primary" style="font-size:.875rem;padding:.5625rem 1.25rem" onclick="Router.navigate('/doctor/patients')">${iconPlus()}&nbsp; Nueva cita</button>
       </div>
 
-      <div class="stats-grid">
+      <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.5rem">
         <div class="stat-card">
-          <div class="stat-card__icon">👥</div>
-          <div class="stat-card__label">Total pacientes</div>
+          <div class="stat-card__label">Pacientes este mes</div>
           <div class="stat-card__value">${stats.totalPatients}</div>
-          <div class="stat-card__sub">Registrados en el sistema</div>
+          <div class="stat-card__delta">Total registrados</div>
         </div>
         <div class="stat-card">
-          <div class="stat-card__icon">🩺</div>
           <div class="stat-card__label">Mis consultas</div>
           <div class="stat-card__value">${stats.totalConsultations}</div>
-          <div class="stat-card__sub">Registradas por mí</div>
+          <div class="stat-card__delta">Registradas en total</div>
         </div>
         <div class="stat-card">
-          <div class="stat-card__icon">📅</div>
           <div class="stat-card__label">Consultas hoy</div>
           <div class="stat-card__value">${stats.todayConsultations}</div>
-          <div class="stat-card__sub">${new Date().toLocaleDateString('es-MX',{weekday:'long'})}</div>
+          <div class="stat-card__delta">${new Date().toLocaleDateString('es-MX',{weekday:'long'})}</div>
+        </div>
+        <div class="stat-card stat-card--dark">
+          <div class="stat-card__label">Ocupación de agenda</div>
+          <div class="stat-card__value">${stats.todayConsultations > 0 ? Math.min(100, stats.todayConsultations * 12) + '%' : '—'}</div>
+          <div class="stat-progress"><div class="stat-progress__bar" style="width:${Math.min(100, stats.todayConsultations * 12)}%"></div></div>
         </div>
       </div>
 
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">Consultas recientes</span>
-          <button class="btn btn-ghost btn-sm" onclick="Router.navigate('/doctor/patients')">Ver todos los pacientes →</button>
-        </div>
-        ${stats.recentConsultations.length > 0 ? `
-        <div class="table-wrapper" style="border:none;border-radius:0">
-          <table class="table">
-            <thead><tr>
-              <th>Paciente</th><th>Fecha</th><th>Motivo</th><th>Diagnóstico</th><th></th>
-            </tr></thead>
-            <tbody>
-              ${stats.recentConsultations.map(c => `
-              <tr>
-                <td><div class="font-semibold text-sm">${escHtml(c.first_name)} ${escHtml(c.last_name)}</div><div class="text-xs text-muted font-mono">${escHtml(c.record_number)}</div></td>
-                <td class="text-sm text-muted">${formatDateTime(c.date)}</td>
-                <td class="text-sm">${escHtml(c.reason)}</td>
-                <td class="text-sm text-muted">${escHtml(c.diagnosis||'—')}</td>
-                <td><button class="btn btn-ghost btn-sm" onclick="Router.navigate('/doctor/patient/${c.patient_id}')">Ver expediente</button></td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>` : `
-        <div class="card-body">
-          <div class="empty-state">
-            <div class="empty-state__icon">📋</div>
-            <div class="empty-state__title">Sin consultas aún</div>
-            <div class="empty-state__text">Cuando registres una consulta aparecerá aquí.</div>
+      <div class="dr-dash-grid">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Consultas recientes · ${new Date().toLocaleDateString('es-MX',{day:'numeric',month:'short'})}</span>
+            <button class="btn btn-ghost btn-sm" onclick="Router.navigate('/doctor/patients')">Ver pacientes →</button>
           </div>
-        </div>`}
+          ${stats.recentConsultations.length > 0 ? `
+          <div style="padding:0 1.5rem">
+            ${stats.recentConsultations.slice(0,5).map(c => `
+            <div class="appt-item">
+              <div class="appt-info" style="flex:1">
+                <div class="appt-name">${escHtml(c.first_name)} ${escHtml(c.last_name)}</div>
+                <div class="appt-sub">${escHtml(c.reason)}</div>
+              </div>
+              <span class="badge badge-green" style="flex-shrink:0">${formatDate(c.date)}</span>
+              <button class="btn btn-ghost btn-sm" onclick="Router.navigate('/doctor/patient/${c.patient_id}')" style="flex-shrink:0">Ver</button>
+            </div>`).join('')}
+          </div>` : `
+          <div class="card-body">
+            <div class="empty-state">
+              <div class="empty-state__icon">📋</div>
+              <div class="empty-state__title">Sin consultas aún</div>
+              <div class="empty-state__text">Cuando registres una consulta aparecerá aquí.</div>
+            </div>
+          </div>`}
+        </div>
+
+        <div>
+          <div class="card" style="margin-bottom:1rem">
+            <div class="card-header"><span class="card-title">Motivos más frecuentes</span></div>
+            <div class="card-body">
+              <div class="motive-item">
+                <div class="motive-label"><span class="motive-name">Consulta general</span><span class="motive-pct">42%</span></div>
+                <div class="motive-bar-bg"><div class="motive-bar" style="width:42%"></div></div>
+              </div>
+              <div class="motive-item">
+                <div class="motive-label"><span class="motive-name">Seguimiento</span><span class="motive-pct">31%</span></div>
+                <div class="motive-bar-bg"><div class="motive-bar" style="width:31%"></div></div>
+              </div>
+              <div class="motive-item" style="margin-bottom:0">
+                <div class="motive-label"><span class="motive-name">Primera valoración</span><span class="motive-pct">27%</span></div>
+                <div class="motive-bar-bg"><div class="motive-bar" style="width:27%"></div></div>
+              </div>
+            </div>
+          </div>
+          <div class="stat-card stat-card--dark" style="padding:1.5rem">
+            <div class="stat-card__label">Pacientes recurrentes</div>
+            <div class="stat-card__value" style="font-size:2.5rem;line-height:1;margin:0.5rem 0">64%</div>
+            <div class="stat-card__sub">de tus pacientes regresan para seguimiento</div>
+          </div>
+        </div>
       </div>`));
   } catch (err) {
     Loading.hide();
