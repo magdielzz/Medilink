@@ -24,7 +24,9 @@ if (!JWT_SECRET) {
 }
 
 // ─── Database ─────────────────────────────────────────────────────────────────
-const db = new Database(path.join(__dirname, 'medilink.db'));
+// En producción usa /data (volumen persistente), en local usa la carpeta del proyecto
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'medilink.db');
+const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
