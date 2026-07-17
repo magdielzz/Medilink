@@ -1,0 +1,6 @@
+node_modules/
+medilink.db
+.jwt_secret
+*.db-shm
+*.db-wal
+.env
