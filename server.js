@@ -312,7 +312,8 @@ app.get('/api/auth/me', authenticate, (req, res) => {
 
 app.put('/api/auth/profile', authenticate, (req, res) => {
   const { firstName, lastName, phone, dateOfBirth, address,
-          emergencyContactName, emergencyContactPhone, hospital } = req.body;
+          emergencyContactName, emergencyContactPhone,
+          insuranceProvider, insuranceNumber, hospital } = req.body;
 
   db.transaction(() => {
     if (firstName) db.prepare('UPDATE users SET first_name = ? WHERE id = ?').run(sanitizeStr(firstName), req.user.id);
@@ -321,7 +322,9 @@ app.put('/api/auth/profile', authenticate, (req, res) => {
     if (req.user.role === 'patient') {
       const fields = { phone, date_of_birth: dateOfBirth, address,
                        emergency_contact_name: emergencyContactName,
-                       emergency_contact_phone: emergencyContactPhone };
+                       emergency_contact_phone: emergencyContactPhone,
+                       insurance_provider: insuranceProvider,
+                       insurance_number: insuranceNumber };
       for (const [col, val] of Object.entries(fields)) {
         if (val !== undefined)
           db.prepare(`UPDATE patients SET ${col} = ? WHERE user_id = ?`).run(val || null, req.user.id);
@@ -332,6 +335,21 @@ app.put('/api/auth/profile', authenticate, (req, res) => {
     }
   })();
   res.json({ message: 'Perfil actualizado correctamente' });
+});
+
+// ─── Doctors (patient search) ─────────────────────────────────────────────────
+app.get('/api/doctors', authenticate, (req, res) => {
+  const q = `%${req.query.q || ''}%`;
+  const rows = db.prepare(`
+    SELECT d.id, u.first_name, u.last_name, u.email,
+           d.specialty, d.license_number, d.phone, d.hospital
+    FROM doctors d
+    JOIN users u ON u.id = d.user_id
+    WHERE u.first_name LIKE ? OR u.last_name LIKE ? OR d.specialty LIKE ? OR d.hospital LIKE ?
+    ORDER BY u.last_name, u.first_name
+    LIMIT 100
+  `).all(q, q, q, q);
+  res.json(rows);
 });
 
 // ─── Patients ─────────────────────────────────────────────────────────────────

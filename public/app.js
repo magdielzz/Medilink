@@ -291,6 +291,7 @@ function renderPatientShell(activePath, user, contentHtml) {
             <div class="pt-user-av">${initials(user?.first_name, user?.last_name)}</div>
             <span class="pt-user-label">Paciente</span>
           </button>
+          <button class="btn btn-ghost btn-sm" onclick="logout()" title="Cerrar sesión" style="display:flex;align-items:center;gap:.375rem;padding:.375rem .75rem;font-size:.8125rem;color:var(--color-text-3)">${iconLogout()}<span style="display:none;display:inline">Salir</span></button>
         </div>
       </nav>
       <main class="pt-main" id="main-content">
@@ -1257,6 +1258,8 @@ async function renderPatientProfile() {
           address:                document.getElementById('pf-address').value || null,
           emergencyContactName:   document.getElementById('pf-ec-name').value || null,
           emergencyContactPhone:  document.getElementById('pf-ec-phone').value || null,
+          insuranceProvider:      document.getElementById('pf-ins-p').value || null,
+          insuranceNumber:        document.getElementById('pf-ins-n').value || null,
         });
         Toast.success('Perfil actualizado correctamente');
         btn.disabled = false; btn.textContent = 'Guardar cambios';
@@ -2039,6 +2042,162 @@ window.submitUpdateStudy = async function(studyId, patientId) {
 };
 
 // ============================================================
+// PAGES — PATIENT EXTRA (Search / Citas / Favoritos)
+// ============================================================
+async function renderPatientSearch() {
+  Loading.show();
+  try {
+    const [me, doctors] = await Promise.all([API.get('/auth/me'), API.get('/doctors')]);
+    State.setUser(me);
+
+    setContent(renderShell('/patient/search', 'patient', me, `
+      <div class="page-header">
+        <h2 class="page-title">Buscar médico</h2>
+        <p class="page-subtitle">Encuentra al especialista que necesitas</p>
+      </div>
+
+      <div class="card" style="margin-bottom:1.5rem">
+        <div class="card-body" style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:center">
+          <div class="search-wrapper" style="flex:1;min-width:220px">
+            <span class="search-icon">${iconSearch()}</span>
+            <input class="input" type="search" id="doctor-search-q" placeholder="Buscar por nombre o especialidad…" oninput="filterDoctors(this.value)">
+          </div>
+        </div>
+      </div>
+
+      <div id="doctors-list">
+        ${renderDoctorCards(doctors)}
+      </div>`));
+
+    window._allDoctors = doctors;
+  } catch (err) {
+    Loading.hide();
+    if (err.status === 401) { State.clearAuth(); Router.navigate('/login'); return; }
+    Toast.error('Error al cargar médicos: ' + err.message);
+  } finally { Loading.hide(); }
+}
+
+function renderDoctorCards(doctors) {
+  if (!doctors.length) return `
+    <div class="empty-state">
+      <div class="empty-state__icon">🩺</div>
+      <div class="empty-state__title">No se encontraron médicos</div>
+      <div class="empty-state__text">Intenta con otro término de búsqueda.</div>
+    </div>`;
+
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem">
+    ${doctors.map(d => `
+    <div class="card" style="padding:1.5rem;display:flex;flex-direction:column;gap:.75rem">
+      <div style="display:flex;align-items:center;gap:.75rem">
+        <div class="dr-user-av" style="width:48px;height:48px;font-size:1.125rem;flex-shrink:0">${initials(d.first_name, d.last_name)}</div>
+        <div>
+          <div style="font-weight:600;font-size:.9375rem">Dr. ${escHtml(d.first_name)} ${escHtml(d.last_name)}</div>
+          <div class="text-sm text-muted">${escHtml(d.specialty)}</div>
+        </div>
+      </div>
+      ${d.hospital ? `<div class="text-sm text-muted" style="display:flex;align-items:center;gap:.375rem">🏥 ${escHtml(d.hospital)}</div>` : ''}
+      ${d.phone    ? `<div class="text-sm text-muted" style="display:flex;align-items:center;gap:.375rem">📞 ${escHtml(d.phone)}</div>` : ''}
+      <div style="display:flex;align-items:center;gap:.375rem">
+        <span class="badge badge-blue">${escHtml(d.specialty)}</span>
+      </div>
+      <button class="btn btn-primary btn-sm" style="margin-top:.25rem" onclick="Toast.info('Agenda de citas próximamente')">Agendar cita</button>
+    </div>`).join('')}
+  </div>`;
+}
+
+window.filterDoctors = function(q) {
+  const all = window._allDoctors || [];
+  const lq = q.toLowerCase();
+  const filtered = lq ? all.filter(d =>
+    `${d.first_name} ${d.last_name}`.toLowerCase().includes(lq) ||
+    (d.specialty||'').toLowerCase().includes(lq) ||
+    (d.hospital||'').toLowerCase().includes(lq)
+  ) : all;
+  document.getElementById('doctors-list').innerHTML = renderDoctorCards(filtered);
+};
+
+async function renderPatientCitas() {
+  Loading.show();
+  try {
+    const [me, data] = await Promise.all([API.get('/auth/me'), API.get('/my-record')]);
+    State.setUser(me);
+    const { consultations } = data;
+
+    setContent(renderShell('/patient/citas', 'patient', me, `
+      <div class="page-header">
+        <h2 class="page-title">Mis citas</h2>
+        <p class="page-subtitle">${consultations.length} consulta${consultations.length !== 1 ? 's' : ''} registrada${consultations.length !== 1 ? 's' : ''}</p>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Historial de consultas</span>
+          <button class="btn btn-secondary btn-sm" onclick="Router.navigate('/patient/search')">${iconSearch()} Buscar médico</button>
+        </div>
+        <div class="card-body">
+          ${consultations.length === 0 ? `
+            <div class="empty-state">
+              <div class="empty-state__icon">📅</div>
+              <div class="empty-state__title">Sin consultas aún</div>
+              <div class="empty-state__text">Cuando un médico registre una consulta, aparecerá aquí.</div>
+              <button class="btn btn-primary btn-sm" style="margin-top:1rem" onclick="Router.navigate('/patient/search')">Buscar un médico</button>
+            </div>` : `
+          <div style="display:flex;flex-direction:column;gap:.75rem">
+            ${consultations.map(c => `
+            <div class="card" style="padding:1.25rem;border:1px solid var(--color-border)">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+                <div>
+                  <div style="font-weight:600;margin-bottom:.25rem">${escHtml(c.reason)}</div>
+                  <div class="text-sm text-muted">Dr. ${escHtml(c.doctor_first_name||'')} ${escHtml(c.doctor_last_name||'')} · ${escHtml(c.specialty||'')}</div>
+                </div>
+                <div style="text-align:right;flex-shrink:0">
+                  <div class="text-sm font-semibold">${formatDateTime(c.date)}</div>
+                  ${c.diagnosis ? `<span class="badge badge-blue" style="margin-top:.25rem">${escHtml(c.diagnosis)}</span>` : ''}
+                </div>
+              </div>
+              ${c.treatment_plan ? `<div class="text-sm text-muted" style="margin-top:.5rem"><strong>Tratamiento:</strong> ${escHtml(c.treatment_plan)}</div>` : ''}
+              ${c.prescriptions && c.prescriptions.length ? `
+              <div style="margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--color-border)">
+                <div class="text-xs text-muted" style="margin-bottom:.375rem">RECETAS</div>
+                <div style="display:flex;flex-wrap:wrap;gap:.375rem">
+                  ${c.prescriptions.map(rx => `<span class="badge badge-gray">💊 ${escHtml(rx.medication)} ${escHtml(rx.dosage)}</span>`).join('')}
+                </div>
+              </div>` : ''}
+            </div>`).join('')}
+          </div>`}
+        </div>
+      </div>`));
+  } catch (err) {
+    Loading.hide();
+    if (err.status === 401) { State.clearAuth(); Router.navigate('/login'); return; }
+    Toast.error('Error al cargar citas: ' + err.message);
+  } finally { Loading.hide(); }
+}
+
+async function renderPatientFavoritos() {
+  Loading.show();
+  try {
+    const me = await API.get('/auth/me');
+    State.setUser(me);
+
+    setContent(renderShell('/patient/favoritos', 'patient', me, `
+      <div class="page-header">
+        <h2 class="page-title">Favoritos</h2>
+        <p class="page-subtitle">Tus médicos y servicios guardados</p>
+      </div>
+      <div class="empty-state" style="margin-top:3rem">
+        <div class="empty-state__icon">⭐</div>
+        <div class="empty-state__title">Aún no tienes favoritos</div>
+        <div class="empty-state__text">Guarda médicos de tu confianza para acceder rápidamente.</div>
+        <button class="btn btn-primary btn-sm" style="margin-top:1rem" onclick="Router.navigate('/patient/search')">Buscar médicos</button>
+      </div>`));
+  } catch (err) {
+    Loading.hide();
+    if (err.status === 401) { State.clearAuth(); Router.navigate('/login'); return; }
+  } finally { Loading.hide(); }
+}
+
+// ============================================================
 // MISC HELPERS
 // ============================================================
 function initTabs() {
@@ -2099,6 +2258,9 @@ Router.on('/reset-password',      renderResetPassword);
 Router.on('/patient/dashboard',   renderPatientDashboard);
 Router.on('/patient/record',      renderPatientRecord);
 Router.on('/patient/profile',     renderPatientProfile);
+Router.on('/patient/search',      renderPatientSearch);
+Router.on('/patient/citas',       renderPatientCitas);
+Router.on('/patient/favoritos',   renderPatientFavoritos);
 Router.on('/doctor/dashboard',    renderDoctorDashboard);
 Router.on('/doctor/patients',     renderDoctorPatients);
 Router.on('/doctor/patient/:id',  (id) => renderDoctorPatientDetail(parseInt(id)));
