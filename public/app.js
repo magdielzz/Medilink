@@ -309,50 +309,100 @@ const iconChevron = (d='down') => svgI(`<polyline points="${d==='down'?'6 9 12 1
 function renderLanding() {
   setContent(`
     <div class="landing-page">
-      <nav class="landing-nav">
-        <a class="landing-nav__brand" href="#">
-          <div class="brand-logo"><div class="brand-logo__ring"></div><div class="brand-logo__circle"></div></div>
-          <span class="brand-wordmark">MediLink</span>
+
+      <!-- NAV -->
+      <nav class="ln-nav">
+        <a class="ln-nav__brand" href="#">
+          <span class="ln-nav__dot"></span>
+          <span class="ln-nav__wordmark">MediLink</span>
         </a>
-        <div class="landing-nav__spacer"></div>
-        <div class="landing-nav__links">
-          <span class="landing-nav__link" onclick="Router.navigate('/login')">Iniciar sesión</span>
-          <button class="btn btn-primary btn-sm" onclick="Router.navigate('/register')">Registrarse</button>
-        </div>
+        <div class="ln-nav__spacer"></div>
+        <span class="ln-nav__link" onclick="Router.navigate('/login')">Iniciar sesión</span>
+        <button class="ln-nav__cta" onclick="Router.navigate('/register')">Registrarse gratis</button>
       </nav>
 
-      <section class="hero">
-        <div class="hero__eyebrow">🏥 Plataforma Médica Digital</div>
-        <h1>Tu salud, digitalizada y segura</h1>
-        <p>MediLink conecta pacientes y médicos en una plataforma unificada con expedientes clínicos electrónicos, consultas, recetas y más.</p>
-        <div class="hero__cta">
-          <button class="btn btn-primary btn-lg" onclick="Router.navigate('/register')">Crear cuenta gratuita</button>
-          <button class="btn btn-secondary btn-lg" onclick="Router.navigate('/login')">Iniciar sesión</button>
-        </div>
-        <div class="hero-visual">
-          <div class="hero-visual__bar">
-            <div class="hero-dot hero-dot-r"></div>
-            <div class="hero-dot hero-dot-y"></div>
-            <div class="hero-dot hero-dot-g"></div>
+      <!-- HERO -->
+      <section class="ln-hero">
+        <div class="ln-hero__left">
+          <div class="ln-eyebrow">
+            <span class="ln-eyebrow__dot"></span>
+            Plataforma de salud unificada · México
           </div>
-          <div class="hero-visual__content">
-            <div class="hero-visual__sidebar">
-              <div class="hero-visual__sidebar-item active"></div>
-              <div class="hero-visual__sidebar-item"></div>
-              <div class="hero-visual__sidebar-item"></div>
-              <div class="hero-visual__sidebar-item"></div>
+          <h1 class="ln-h1">El médico correcto,<br><span class="ln-h1__accent">sin meses</span> de espera.</h1>
+          <p class="ln-sub">Describe tus síntomas, encuentra al especialista adecuado y lleva tu expediente médico digital contigo. Pacientes y médicos, en la misma infraestructura.</p>
+          <div class="ln-ctas">
+            <button class="ln-btn-primary" onclick="Router.navigate('/register')">Soy paciente &nbsp;→</button>
+            <button class="ln-btn-outline" onclick="Router.navigate('/register')">Soy médico</button>
+          </div>
+          <div class="ln-avatars">
+            <div class="ln-avatars__row">
+              <div class="ln-av" style="background:#157A62;color:#fff">NR</div>
+              <div class="ln-av" style="background:#6B4C3B;color:#fff">CM</div>
+              <div class="ln-av" style="background:#2B6CB0;color:#fff">AO</div>
+              <div class="ln-av" style="background:#276749;color:#fff">PG</div>
             </div>
-            <div class="hero-visual__main">
-              <div class="hero-visual__stat"><div class="hero-visual__stat-n"></div><div class="hero-visual__stat-l"></div></div>
-              <div class="hero-visual__stat"><div class="hero-visual__stat-n"></div><div class="hero-visual__stat-l"></div></div>
-              <div class="hero-visual__stat"><div class="hero-visual__stat-n"></div><div class="hero-visual__stat-l"></div></div>
-              <div class="hero-visual__stat"><div class="hero-visual__stat-n"></div><div class="hero-visual__stat-l"></div></div>
+            <span class="ln-avatars__label">+240 profesionales de salud ya en la plataforma</span>
+          </div>
+        </div>
+
+        <div class="ln-hero__right">
+          <div class="ln-ai-card">
+            <div class="ln-ai-card__header">
+              <span class="ln-ai-card__label">MEDILINK IA</span>
+              <span class="ln-ai-card__title">¿Qué síntomas tienes?</span>
+            </div>
+            <div class="ln-ai-card__body">
+              <div class="ln-ai-input">Dolor de cabeza intenso, mareos frecuentes</div>
+              <div class="ln-ai-section-label">ESPECIALISTAS RECOMENDADOS</div>
+              <div class="ln-ai-doc">
+                <div class="ln-ai-doc__av" style="background:#157A62">NR</div>
+                <div class="ln-ai-doc__info">
+                  <div class="ln-ai-doc__name">Dra. Nora Ramírez</div>
+                  <div class="ln-ai-doc__meta">Neurología · UNAM &nbsp;★ 4.9</div>
+                </div>
+                <div class="ln-ai-doc__tag ln-ai-doc__tag--today">Hoy</div>
+              </div>
+              <div class="ln-ai-doc">
+                <div class="ln-ai-doc__av" style="background:#6B4C3B">CM</div>
+                <div class="ln-ai-doc__info">
+                  <div class="ln-ai-doc__name">Dr. Carlos Mendoza</div>
+                  <div class="ln-ai-doc__meta">Medicina Interna &nbsp;★ 4.8</div>
+                </div>
+                <div class="ln-ai-doc__tag">Mañana</div>
+              </div>
+              <div class="ln-ai-suggestion">
+                <span class="ln-ai-suggestion__label">IA sugiere:</span>
+                compatible con cefalea tensional o migraña. Agenda con neurología antes de 7 días.
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      <section class="features">
+      <!-- STATS DARK BAR -->
+      <section class="ln-stats">
+        <div class="ln-stats__inner">
+          <div class="ln-stat">
+            <div class="ln-stat__n">6 meses</div>
+            <div class="ln-stat__l">de espera promedio para un especialista en el IMSS</div>
+          </div>
+          <div class="ln-stat">
+            <div class="ln-stat__n">68%</div>
+            <div class="ln-stat__l">de los expedientes médicos siguen en papel en México</div>
+          </div>
+          <div class="ln-stat">
+            <div class="ln-stat__n">3.4x</div>
+            <div class="ln-stat__l">más rápido llegar al especialista correcto con orientación por IA</div>
+          </div>
+          <div class="ln-stat">
+            <div class="ln-stat__n">$0</div>
+            <div class="ln-stat__l">para el paciente que busca y agenda a su especialista</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FEATURES -->
+      <section class="features" style="background:var(--color-surface)">
         <div class="features__header">
           <div class="features__eyebrow">Funcionalidades</div>
           <h2>Todo lo que necesitas en un solo lugar</h2>
@@ -391,7 +441,7 @@ function renderLanding() {
         </div>
       </section>
 
-      <!-- ── El Problema ─────────────────────────────────── -->
+      <!-- EL PROBLEMA -->
       <section class="problem-section">
         <div class="problem-inner">
           <div class="problem-text">
@@ -438,7 +488,7 @@ function renderLanding() {
         </div>
       </section>
 
-      <!-- ── Objetivo del Proyecto ──────────────────────── -->
+      <!-- OBJETIVO -->
       <section class="objetivo-section">
         <div class="objetivo-inner">
           <div class="features__eyebrow" style="text-align:center">Objetivo del Proyecto</div>
@@ -468,12 +518,13 @@ function renderLanding() {
         </div>
       </section>
 
+      <!-- CTA FINAL -->
       <section class="cta-section">
         <h2>¿Listo para empezar?</h2>
         <p>Únete a MediLink hoy y moderniza la gestión de salud para ti y tus pacientes.</p>
-        <div class="hero__cta">
-          <button class="btn btn-lg" style="background:white;color:var(--color-primary-dark);font-weight:700;" onclick="Router.navigate('/register')">Registrar como Paciente</button>
-          <button class="btn btn-lg" style="background:rgba(255,255,255,0.15);color:white;border:1.5px solid rgba(255,255,255,0.5);" onclick="Router.navigate('/register')">Registrar como Médico</button>
+        <div style="display:flex;gap:.875rem;justify-content:center;flex-wrap:wrap;margin-top:2rem">
+          <button class="ln-btn-primary" style="font-size:1rem;padding:.875rem 2rem" onclick="Router.navigate('/register')">Soy paciente &nbsp;→</button>
+          <button class="ln-btn-outline" style="font-size:1rem;padding:.875rem 2rem;border-color:rgba(255,255,255,0.5);color:white" onclick="Router.navigate('/register')">Soy médico</button>
         </div>
       </section>
 
