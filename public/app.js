@@ -1003,6 +1003,7 @@ async function renderPatientRecord() {
     const [me, data] = await Promise.all([API.get('/auth/me'), API.get('/my-record')]);
     State.setUser(me);
     const { record, consultations, studies, allergies, conditions, medications } = data;
+    window._myPatientId = data.patientId;
 
     // Build timeline from all events sorted by date
     const timeline = [];
@@ -1078,7 +1079,13 @@ async function renderPatientRecord() {
             <span style="margin-left:1rem;color:var(--color-text-4)">Última actualización: ${formatDate(record.updated_at||record.created_at)}</span>
           </div>
         </div>
-        <button class="pr-export-btn" onclick="Toast.info('Función de exportar próximamente')">${iconDownload()} Exportar PDF</button>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+          <button class="btn btn-secondary btn-sm" onclick="openMyAdd('allergy')">${iconPlus()} Alergia</button>
+          <button class="btn btn-secondary btn-sm" onclick="openMyAdd('condition')">${iconPlus()} Condición</button>
+          <button class="btn btn-secondary btn-sm" onclick="openMyAdd('medication')">${iconPlus()} Medicamento</button>
+          <button class="btn btn-secondary btn-sm" onclick="openMyAdd('study')">${iconPlus()} Estudio</button>
+          <button class="pr-export-btn" onclick="Toast.info('Función de exportar próximamente')">${iconDownload()} Exportar PDF</button>
+        </div>
       </div>
 
       <!-- Two-column body -->
@@ -2049,11 +2056,27 @@ async function renderPatientSearch() {
   try {
     const [me, doctors] = await Promise.all([API.get('/auth/me'), API.get('/doctors')]);
     State.setUser(me);
+    window._myInsurer = (me.profile && me.profile.insurance_provider) || '';
+    window._insurerOnly = false;
 
     setContent(renderShell('/patient/search', 'patient', me, `
       <div class="page-header">
         <h2 class="page-title">Buscar médico</h2>
-        <p class="page-subtitle">Encuentra al especialista que necesitas</p>
+        <p class="page-subtitle">Describe tus síntomas y deja que la IA te oriente al especialista correcto</p>
+      </div>
+
+      <div class="card" style="margin-bottom:1.5rem;border:1px solid var(--color-primary)">
+        <div class="card-body">
+          <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.625rem">
+            <span class="badge badge-blue">✨ Búsqueda inteligente con IA</span>
+          </div>
+          <textarea class="input" id="ai-symptoms" rows="2" placeholder="Ej. Tengo dolor de cabeza intenso y mareos frecuentes desde hace días…"></textarea>
+          <div style="display:flex;gap:.5rem;margin-top:.625rem;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm" id="ai-btn" onclick="aiSearch()">✨ Buscar con IA</button>
+            <button class="btn btn-ghost btn-sm" onclick="clearAiSearch()">Limpiar</button>
+          </div>
+          <div id="ai-result" style="margin-top:1rem"></div>
+        </div>
       </div>
 
       <div class="card" style="margin-bottom:1.5rem">
@@ -2062,6 +2085,7 @@ async function renderPatientSearch() {
             <span class="search-icon">${iconSearch()}</span>
             <input class="input" type="search" id="doctor-search-q" placeholder="Buscar por nombre o especialidad…" oninput="filterDoctors(this.value)">
           </div>
+          ${window._myInsurer ? `<label style="display:flex;align-items:center;gap:.4rem;font-size:.8125rem;white-space:nowrap"><input type="checkbox" onchange="toggleInsurerFilter(this.checked)"> Solo los que aceptan mi seguro (${escHtml(window._myInsurer)})</label>` : `<span class="text-xs text-muted">Agrega tu aseguradora en tu perfil para ver coberturas</span>`}
         </div>
       </div>
 
@@ -2076,6 +2100,42 @@ async function renderPatientSearch() {
     Toast.error('Error al cargar médicos: ' + err.message);
   } finally { Loading.hide(); }
 }
+
+const AI_SPECIALTIES = ['Medicina General','Pediatría','Cardiología','Dermatología','Ginecología','Neurología','Oftalmología','Ortopedia','Psiquiatría','Radiología','Oncología','Endocrinología','Gastroenterología','Nefrología','Neumología','Reumatología','Urología','Medicina Interna'];
+
+window.aiSearch = async function () {
+  const q = document.getElementById('ai-symptoms').value.trim();
+  if (!q) { Toast.warning('Describe tus síntomas primero'); return; }
+  const btn = document.getElementById('ai-btn'); btn.disabled = true; btn.innerHTML = `<span class="inline-spinner"></span> Analizando…`;
+  const res = document.getElementById('ai-result'); res.innerHTML = '';
+  try {
+    const data = await API.post('/ai/triage', { symptoms: q });
+    if (!data || !data.specialty) { res.innerHTML = `<div class="alert alert-warning">No pude interpretar los síntomas. Intenta describirlos de otra forma.</div>`; return; }
+    const matches = (window._allDoctors || []).filter(d => d.specialty === data.specialty);
+    const urgcls = { alta: 'badge-red', media: 'badge-yellow', baja: 'badge-green' }[data.urgency] || 'badge-gray';
+    res.innerHTML = `
+      <div style="border:1px solid var(--color-primary);border-radius:12px;padding:1rem;background:rgba(21,122,98,.05)">
+        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap">
+          <span class="badge badge-blue">IA · Orientación</span>
+          <span class="badge ${urgcls}">Urgencia ${escHtml(data.urgency || '—')}</span>
+        </div>
+        <div style="font-weight:600;margin-bottom:.25rem">Especialidad sugerida: ${escHtml(data.specialty)}</div>
+        <div class="text-sm text-muted">${escHtml(data.reason || '')}</div>
+        <div class="text-xs text-muted" style="margin-top:.5rem">⚠️ La IA solo orienta hacia un especialista; no realiza diagnósticos. Ante una urgencia llama al 911.</div>
+      </div>`;
+    document.getElementById('doctors-list').innerHTML = matches.length
+      ? `<div class="text-sm text-muted" style="margin-bottom:.75rem">${matches.length} especialista${matches.length !== 1 ? 's' : ''} en ${escHtml(data.specialty)}</div>` + renderDoctorCards(matches)
+      : `<div class="empty-state"><div class="empty-state__icon">🔎</div><div class="empty-state__title">No hay médicos de ${escHtml(data.specialty)} disponibles</div><div class="empty-state__text">Muestra todos los médicos con "Limpiar".</div></div>`;
+  } catch (err) {
+    res.innerHTML = `<div class="alert alert-error">No se pudo procesar la búsqueda: ${escHtml(err.message || String(err))}</div>`;
+  } finally { btn.disabled = false; btn.innerHTML = '✨ Buscar con IA'; }
+};
+window.clearAiSearch = function () {
+  const s = document.getElementById('ai-symptoms'); if (s) s.value = '';
+  const r = document.getElementById('ai-result'); if (r) r.innerHTML = '';
+  document.getElementById('doctors-list').innerHTML = renderDoctorCards(window._allDoctors || []);
+};
+window.toggleInsurerFilter = function (on) { window._insurerOnly = on; filterDoctors((document.getElementById('doctor-search-q') || {}).value || ''); };
 
 function renderDoctorCards(doctors) {
   if (!doctors.length) return `
@@ -2097,10 +2157,25 @@ function renderDoctorCards(doctors) {
       </div>
       ${d.hospital ? `<div class="text-sm text-muted" style="display:flex;align-items:center;gap:.375rem">🏥 ${escHtml(d.hospital)}</div>` : ''}
       ${d.phone    ? `<div class="text-sm text-muted" style="display:flex;align-items:center;gap:.375rem">📞 ${escHtml(d.phone)}</div>` : ''}
-      <div style="display:flex;align-items:center;gap:.375rem">
+      <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
         <span class="badge badge-blue">${escHtml(d.specialty)}</span>
+        ${d.rating ? `<span class="ml-stars" title="${d.rating} de 5">${starDisplay(d.rating)}<span class="text-xs text-muted" style="margin-left:.25rem">${d.rating} (${d.review_count})</span></span>` : `<span class="text-xs text-muted">Sin reseñas</span>`}
       </div>
-      <button class="btn btn-primary btn-sm" style="margin-top:.25rem" onclick="Toast.info('Agenda de citas próximamente')">Agendar cita</button>
+      <div style="display:flex;align-items:center;gap:.375rem;flex-wrap:wrap">
+        ${(d.accepted_insurers && d.accepted_insurers.length) ? `<span class="text-xs text-muted">Seguros: ${d.accepted_insurers.map(escHtml).join(', ')}</span>` : `<span class="text-xs text-muted">Sin convenios de seguro</span>`}
+      </div>
+      ${(window._myInsurer && (d.accepted_insurers || []).includes(window._myInsurer)) ? `
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:.5rem;margin-top:.25rem">
+        <div>
+          <div style="font-weight:700;font-size:1.0625rem">$${Math.round((d.consultation_price || 0) * 0.2).toLocaleString('es-MX')}<span class="text-xs text-muted" style="font-weight:400"> tu copago</span></div>
+          <div class="text-xs" style="text-decoration:line-through;color:var(--color-text-4)">$${(d.consultation_price || 0).toLocaleString('es-MX')}</div>
+        </div>
+        <span class="badge badge-green">✓ Cubre ${escHtml(window._myInsurer)}</span>
+      </div>` : `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-top:.25rem">
+        <div style="font-weight:700;font-size:1.0625rem">$${(d.consultation_price || 0).toLocaleString('es-MX')}<span class="text-xs text-muted" style="font-weight:400"> /consulta</span></div>
+      </div>`}
+      <button class="btn btn-primary btn-sm" style="margin-top:.25rem" onclick="openBookingModal(${d.id})">${iconCalendar()} Agendar cita</button>
     </div>`).join('')}
   </div>`;
 }
@@ -2108,65 +2183,84 @@ function renderDoctorCards(doctors) {
 window.filterDoctors = function(q) {
   const all = window._allDoctors || [];
   const lq = q.toLowerCase();
-  const filtered = lq ? all.filter(d =>
+  let filtered = lq ? all.filter(d =>
     `${d.first_name} ${d.last_name}`.toLowerCase().includes(lq) ||
     (d.specialty||'').toLowerCase().includes(lq) ||
     (d.hospital||'').toLowerCase().includes(lq)
   ) : all;
+  if (window._insurerOnly && window._myInsurer) filtered = filtered.filter(d => (d.accepted_insurers||[]).includes(window._myInsurer));
   document.getElementById('doctors-list').innerHTML = renderDoctorCards(filtered);
+};
+
+const APPT_STATUS = {
+  pending:   { label: 'Pendiente',  cls: 'badge-yellow' },
+  confirmed: { label: 'Confirmada', cls: 'badge-blue' },
+  completed: { label: 'Completada', cls: 'badge-green' },
+  cancelled: { label: 'Cancelada',  cls: 'badge-gray' },
+  rejected:  { label: 'Rechazada',  cls: 'badge-red' },
 };
 
 async function renderPatientCitas() {
   Loading.show();
   try {
-    const [me, data] = await Promise.all([API.get('/auth/me'), API.get('/my-record')]);
+    const [me, appts] = await Promise.all([API.get('/auth/me'), API.get('/appointments')]);
     State.setUser(me);
-    const { consultations } = data;
+    const now = Date.now();
+    const upcoming = appts.filter(a => ['pending','confirmed'].includes(a.status) && new Date(a.datetime) >= now - 36e5);
+    const past = appts.filter(a => !upcoming.includes(a)).sort((a,b) => new Date(b.datetime) - new Date(a.datetime));
+
+    const apptCard = (a) => {
+      const st = APPT_STATUS[a.status] || APPT_STATUS.pending;
+      const soon = new Date(a.datetime) - now < 864e5 && new Date(a.datetime) > now;
+      return `
+      <div class="card" style="padding:1.25rem;border:1px solid var(--color-border)">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+          <div style="display:flex;gap:.75rem;align-items:center">
+            <div class="dr-user-av" style="width:44px;height:44px;font-size:1rem;flex-shrink:0">${initials(a.doctor_first_name, a.doctor_last_name)}</div>
+            <div>
+              <div style="font-weight:600">Dr. ${escHtml(a.doctor_first_name)} ${escHtml(a.doctor_last_name)}</div>
+              <div class="text-sm text-muted">${escHtml(a.specialty||'')}${a.hospital?` · ${escHtml(a.hospital)}`:''}</div>
+              <div class="text-sm" style="margin-top:.25rem">📅 ${formatDateTime(a.datetime)}${soon?` <span class="badge badge-yellow" style="margin-left:.25rem">Pronto</span>`:''}</div>
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <span class="badge ${st.cls}">${st.label}</span>
+            <div class="text-sm font-semibold" style="margin-top:.375rem">$${(a.price||0).toLocaleString('es-MX')}</div>
+            <div class="text-xs ${a.paid ? '' : 'text-muted'}" style="color:${a.paid ? 'var(--color-success,#16a34a)' : ''}">${a.paid ? '✓ Pagada' : 'Sin pagar'}</div>
+            ${a.insurer ? `<div class="text-xs" style="color:#16a34a">🛡️ ${escHtml(a.insurer)} cubrió $${(a.covered || 0).toLocaleString('es-MX')}</div>` : ''}
+          </div>
+        </div>
+        <div class="text-sm text-muted" style="margin-top:.5rem"><strong>Motivo:</strong> ${escHtml(a.reason||'—')}</div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--color-border)">
+          ${!a.paid && ['pending','confirmed'].includes(a.status) ? `<button class="btn btn-primary btn-sm" onclick="openPayModal(${a.id},${a.price||0})">💳 Pagar consulta</button>` : ''}
+          ${['pending','confirmed'].includes(a.status) ? `<button class="btn btn-secondary btn-sm" onclick="cancelAppointment(${a.id})">Cancelar</button>` : ''}
+          ${a.status==='completed' && !a.hasReview ? `<button class="btn btn-primary btn-sm" onclick="openReviewModal(${a.id},'${escHtml(a.doctor_first_name)} ${escHtml(a.doctor_last_name)}')">⭐ Calificar médico</button>` : ''}
+          ${a.status==='completed' && a.hasReview ? `<span class="text-sm text-muted">✓ Ya calificaste esta consulta</span>` : ''}
+        </div>
+      </div>`;
+    };
 
     setContent(renderShell('/patient/citas', 'patient', me, `
-      <div class="page-header">
-        <h2 class="page-title">Mis citas</h2>
-        <p class="page-subtitle">${consultations.length} consulta${consultations.length !== 1 ? 's' : ''} registrada${consultations.length !== 1 ? 's' : ''}</p>
+      <div class="page-header flex justify-between items-center" style="flex-wrap:wrap;gap:1rem">
+        <div>
+          <h2 class="page-title">Mis citas</h2>
+          <p class="page-subtitle">${upcoming.length} próxima${upcoming.length!==1?'s':''} · ${past.length} en historial</p>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="Router.navigate('/patient/search')">${iconPlus()} Agendar nueva cita</button>
       </div>
 
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">Historial de consultas</span>
-          <button class="btn btn-secondary btn-sm" onclick="Router.navigate('/patient/search')">${iconSearch()} Buscar médico</button>
-        </div>
-        <div class="card-body">
-          ${consultations.length === 0 ? `
-            <div class="empty-state">
-              <div class="empty-state__icon">📅</div>
-              <div class="empty-state__title">Sin consultas aún</div>
-              <div class="empty-state__text">Cuando un médico registre una consulta, aparecerá aquí.</div>
-              <button class="btn btn-primary btn-sm" style="margin-top:1rem" onclick="Router.navigate('/patient/search')">Buscar un médico</button>
-            </div>` : `
-          <div style="display:flex;flex-direction:column;gap:.75rem">
-            ${consultations.map(c => `
-            <div class="card" style="padding:1.25rem;border:1px solid var(--color-border)">
-              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap">
-                <div>
-                  <div style="font-weight:600;margin-bottom:.25rem">${escHtml(c.reason)}</div>
-                  <div class="text-sm text-muted">Dr. ${escHtml(c.doctor_first_name||'')} ${escHtml(c.doctor_last_name||'')} · ${escHtml(c.specialty||'')}</div>
-                </div>
-                <div style="text-align:right;flex-shrink:0">
-                  <div class="text-sm font-semibold">${formatDateTime(c.date)}</div>
-                  ${c.diagnosis ? `<span class="badge badge-blue" style="margin-top:.25rem">${escHtml(c.diagnosis)}</span>` : ''}
-                </div>
-              </div>
-              ${c.treatment_plan ? `<div class="text-sm text-muted" style="margin-top:.5rem"><strong>Tratamiento:</strong> ${escHtml(c.treatment_plan)}</div>` : ''}
-              ${c.prescriptions && c.prescriptions.length ? `
-              <div style="margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--color-border)">
-                <div class="text-xs text-muted" style="margin-bottom:.375rem">RECETAS</div>
-                <div style="display:flex;flex-wrap:wrap;gap:.375rem">
-                  ${c.prescriptions.map(rx => `<span class="badge badge-gray">💊 ${escHtml(rx.medication)} ${escHtml(rx.dosage)}</span>`).join('')}
-                </div>
-              </div>` : ''}
-            </div>`).join('')}
-          </div>`}
-        </div>
-      </div>`));
+      <div style="margin-bottom:.75rem"><span class="card-title">Próximas citas</span></div>
+      ${upcoming.length ? `<div style="display:flex;flex-direction:column;gap:.75rem;margin-bottom:2rem">${upcoming.map(apptCard).join('')}</div>` : `
+        <div class="empty-state" style="margin-bottom:2rem">
+          <div class="empty-state__icon">📅</div>
+          <div class="empty-state__title">No tienes citas próximas</div>
+          <div class="empty-state__text">Busca un médico y agenda tu consulta.</div>
+          <button class="btn btn-primary btn-sm" style="margin-top:1rem" onclick="Router.navigate('/patient/search')">Buscar un médico</button>
+        </div>`}
+
+      ${past.length ? `<div style="margin-bottom:.75rem"><span class="card-title">Historial</span></div>
+      <div style="display:flex;flex-direction:column;gap:.75rem">${past.map(apptCard).join('')}</div>` : ''}
+    `));
   } catch (err) {
     Loading.hide();
     if (err.status === 401) { State.clearAuth(); Router.navigate('/login'); return; }
@@ -2248,6 +2342,361 @@ window.logout = logout;
 window.Router = Router;
 
 // ============================================================
+// NUEVO — Estrellas, agendar, pagar, calificar, agenda, ganancias
+// ============================================================
+function starDisplay(rating) {
+  const full = Math.round(rating || 0);
+  let s = '';
+  for (let i = 1; i <= 5; i++) s += `<span style="color:${i <= full ? '#f59e0b' : '#d1d5db'}">★</span>`;
+  return `<span style="letter-spacing:1px">${s}</span>`;
+}
+
+// Modal genérico de formulario -----------------------------------------------
+function simpleFormModal(title, fields, onSubmit, submitLabel = 'Guardar') {
+  const body = fields.map(f => {
+    if (f.type === 'select') return `<div class="form-group"><label class="label ${f.required ? 'label-required' : ''}">${f.label}</label><select class="select" id="sf-${f.id}">${f.options.map(o => `<option value="${o.v}"${o.v === (f.value || '') ? ' selected' : ''}>${o.t}</option>`).join('')}</select></div>`;
+    if (f.type === 'textarea') return `<div class="form-group"><label class="label ${f.required ? 'label-required' : ''}">${f.label}</label><textarea class="input" id="sf-${f.id}" rows="2" placeholder="${f.placeholder || ''}">${f.value || ''}</textarea></div>`;
+    return `<div class="form-group"><label class="label ${f.required ? 'label-required' : ''}">${f.label}</label><input class="input" id="sf-${f.id}" type="${f.type || 'text'}" value="${f.value || ''}" placeholder="${f.placeholder || ''}"></div>`;
+  }).join('');
+  Modal.open(Modal.html(title, `<div id="sf-alert"></div>${body}`, `<button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-primary" id="sf-submit">${submitLabel}</button>`));
+  document.getElementById('sf-submit').addEventListener('click', async () => {
+    const v = {}; fields.forEach(f => { const el = document.getElementById('sf-' + f.id); v[f.id] = typeof el.value === 'string' ? el.value.trim() : el.value; });
+    const missing = fields.find(f => f.required && !v[f.id]);
+    if (missing) { document.getElementById('sf-alert').innerHTML = `<div class="alert alert-error">Completa: ${missing.label.replace(' *', '')}</div>`; return; }
+    const btn = document.getElementById('sf-submit'); btn.disabled = true; btn.innerHTML = `<span class="inline-spinner"></span> Guardando…`;
+    try { await onSubmit(v); Modal.close(); } catch (err) { document.getElementById('sf-alert').innerHTML = `<div class="alert alert-error">${escHtml(err.message)}</div>`; btn.disabled = false; btn.textContent = submitLabel; }
+  });
+}
+
+// Paciente edita su propio expediente ----------------------------------------
+window.openMyAdd = function (kind) {
+  const pid = window._myPatientId;
+  const refresh = () => renderPatientRecord();
+  if (kind === 'allergy') return simpleFormModal('Agregar alergia', [
+    { id: 'allergen', label: 'Alérgeno *', required: true, placeholder: 'Ej. Penicilina' },
+    { id: 'reaction', label: 'Reacción', placeholder: 'Ej. Urticaria' },
+    { id: 'severity', label: 'Severidad', type: 'select', options: [{ v: '', t: 'Seleccionar…' }, { v: 'mild', t: 'Leve' }, { v: 'moderate', t: 'Moderada' }, { v: 'severe', t: 'Grave' }] },
+  ], async v => { await API.post('/allergies', { patientId: pid, allergen: v.allergen, reaction: v.reaction, severity: v.severity }); Toast.success('Alergia registrada'); refresh(); });
+  if (kind === 'condition') return simpleFormModal('Agregar condición', [
+    { id: 'conditionName', label: 'Condición *', required: true, placeholder: 'Ej. Asma' },
+    { id: 'diagnosedDate', label: 'Fecha de diagnóstico', type: 'date' },
+    { id: 'status', label: 'Estado', type: 'select', options: [{ v: 'active', t: 'Activo' }, { v: 'managed', t: 'Controlado' }, { v: 'resolved', t: 'Resuelto' }] },
+    { id: 'treatment', label: 'Tratamiento', placeholder: 'Ej. Inhalador' },
+  ], async v => { await API.post('/conditions', { patientId: pid, conditionName: v.conditionName, diagnosedDate: v.diagnosedDate, status: v.status, treatment: v.treatment }); Toast.success('Condición registrada'); refresh(); });
+  if (kind === 'medication') return simpleFormModal('Agregar medicamento', [
+    { id: 'name', label: 'Medicamento *', required: true },
+    { id: 'dosage', label: 'Dosis *', required: true, placeholder: 'Ej. 50 mg' },
+    { id: 'frequency', label: 'Frecuencia *', required: true, placeholder: 'Ej. Cada 24 h' },
+    { id: 'startDate', label: 'Inicio', type: 'date' },
+  ], async v => { await API.post('/medications', { patientId: pid, name: v.name, dosage: v.dosage, frequency: v.frequency, startDate: v.startDate }); Toast.success('Medicamento registrado'); refresh(); });
+  if (kind === 'study') return simpleFormModal('Registrar estudio', [
+    { id: 'type', label: 'Tipo *', type: 'select', required: true, options: [{ v: 'Laboratorio', t: 'Laboratorio' }, { v: 'Imagenología', t: 'Imagenología' }, { v: 'Otro', t: 'Otro' }] },
+    { id: 'name', label: 'Nombre del estudio *', required: true, placeholder: 'Ej. Biometría hemática' },
+    { id: 'date', label: 'Fecha', type: 'date' },
+    { id: 'result', label: 'Resultado', type: 'textarea' },
+  ], async v => { await API.post('/studies', { patientId: pid, type: v.type, name: v.name, date: v.date, result: v.result, status: v.result ? 'completed' : 'pending' }); Toast.success('Estudio registrado'); refresh(); });
+};
+
+// Agendar cita ---------------------------------------------------------------
+window.openBookingModal = async function (doctorId) {
+  Loading.show();
+  try {
+    const d = await API.get('/doctors/' + doctorId);
+    Loading.hide();
+    window._booking = { doctorId, days: d.slots, selected: null };
+    const daysHtml = d.slots.length
+      ? d.slots.map((day, i) => `<button type="button" class="bk-day" data-i="${i}" onclick="bkPickDay(${i})" style="padding:.5rem .75rem;border:1px solid var(--color-border);border-radius:8px;background:#fff;cursor:pointer;font-size:.8125rem;white-space:nowrap">${new Date(day.date).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' })}</button>`).join('')
+      : `<div class="text-sm text-muted">Este médico no tiene horarios disponibles configurados.</div>`;
+    const revs = (d.reviews || []).slice(0, 2);
+    Modal.open(Modal.html(`Agendar con Dr. ${escHtml(d.first_name)} ${escHtml(d.last_name)}`, `
+      <div id="bk-alert"></div>
+      <div style="display:flex;gap:.75rem;align-items:center;margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--color-border)">
+        <div class="dr-user-av" style="width:48px;height:48px;font-size:1.125rem">${initials(d.first_name, d.last_name)}</div>
+        <div style="flex:1">
+          <div style="font-weight:600">Dr. ${escHtml(d.first_name)} ${escHtml(d.last_name)}</div>
+          <div class="text-sm text-muted">${escHtml(d.specialty)}${d.hospital ? ` · ${escHtml(d.hospital)}` : ''}</div>
+          <div style="margin-top:.25rem">${d.rating ? `${starDisplay(d.rating)} <span class="text-xs text-muted">${d.rating} (${d.review_count})</span>` : '<span class="text-xs text-muted">Sin reseñas</span>'}</div>
+        </div>
+        <div style="text-align:right">
+          ${(window._myInsurer && (d.accepted_insurers || []).includes(window._myInsurer)) ? `
+            <div style="font-weight:700;font-size:1.25rem">$${Math.round((d.consultation_price || 0) * 0.2).toLocaleString('es-MX')}</div>
+            <div class="text-xs" style="text-decoration:line-through;color:var(--color-text-4)">$${(d.consultation_price || 0).toLocaleString('es-MX')}</div>
+            <div class="text-xs" style="color:#16a34a">✓ ${escHtml(window._myInsurer)} cubre 80%</div>
+          ` : `
+            <div style="font-weight:700;font-size:1.25rem">$${(d.consultation_price || 0).toLocaleString('es-MX')}</div>
+            <div class="text-xs text-muted">por consulta</div>
+          `}
+        </div>
+      </div>
+      ${revs.length ? `<div style="margin-bottom:1rem">${revs.map(r => `<div class="text-sm" style="margin-bottom:.375rem">${starDisplay(r.rating)} <span class="text-muted">"${escHtml(r.comment || '')}" — ${escHtml(r.patient_first_name || 'Paciente')}</span></div>`).join('')}</div>` : ''}
+      <label class="label">Elige un día</label>
+      <div style="display:flex;gap:.5rem;overflow-x:auto;padding-bottom:.5rem;margin-bottom:1rem">${daysHtml}</div>
+      <div id="bk-slots" style="margin-bottom:1rem"></div>
+      <div class="form-group"><label class="label">Motivo de la consulta</label><textarea class="input" id="bk-reason" rows="2" placeholder="Describe brevemente el motivo"></textarea></div>
+    `, `<button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-primary" id="bk-submit" disabled onclick="bkSubmit()">Solicitar cita</button>`), { size: 'lg' });
+    if (d.slots.length) bkPickDay(0);
+  } catch (err) { Loading.hide(); Toast.error(err.message); }
+};
+window.bkPickDay = function (i) {
+  document.querySelectorAll('.bk-day').forEach(b => { b.style.background = '#fff'; b.style.color = ''; b.style.borderColor = 'var(--color-border)'; });
+  const active = document.querySelector(`.bk-day[data-i="${i}"]`);
+  if (active) { active.style.background = 'var(--color-primary)'; active.style.color = '#fff'; active.style.borderColor = 'var(--color-primary)'; }
+  const day = window._booking.days[i];
+  window._booking.selected = null; document.getElementById('bk-submit').disabled = true;
+  document.getElementById('bk-slots').innerHTML = `<label class="label">Horarios disponibles</label><div style="display:flex;flex-wrap:wrap;gap:.5rem">${day.slots.map(s => `<button type="button" class="bk-slot" data-iso="${s}" onclick="bkPickSlot('${s}')" style="padding:.4375rem .75rem;border:1px solid var(--color-border);border-radius:8px;background:#fff;cursor:pointer;font-size:.8125rem">${new Date(s).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}</button>`).join('')}</div>`;
+};
+window.bkPickSlot = function (iso) {
+  window._booking.selected = iso;
+  document.querySelectorAll('.bk-slot').forEach(b => { b.style.background = '#fff'; b.style.color = ''; b.style.borderColor = 'var(--color-border)'; });
+  const el = document.querySelector(`.bk-slot[data-iso="${iso}"]`);
+  if (el) { el.style.background = 'var(--color-primary)'; el.style.color = '#fff'; el.style.borderColor = 'var(--color-primary)'; }
+  document.getElementById('bk-submit').disabled = false;
+};
+window.bkSubmit = async function () {
+  const b = window._booking; if (!b.selected) return;
+  const btn = document.getElementById('bk-submit'); btn.disabled = true; btn.innerHTML = `<span class="inline-spinner"></span> Solicitando…`;
+  try {
+    await API.post('/appointments', { doctorId: b.doctorId, datetime: b.selected, reason: document.getElementById('bk-reason').value.trim() || 'Consulta' });
+    Modal.close(); Toast.success('¡Cita solicitada! Revisa "Mis citas" para pagarla.');
+    Router.navigate('/patient/citas');
+  } catch (err) { document.getElementById('bk-alert').innerHTML = `<div class="alert alert-error">${escHtml(err.message)}</div>`; btn.disabled = false; btn.textContent = 'Solicitar cita'; }
+};
+
+// Pagar (simulado) -----------------------------------------------------------
+window.openPayModal = function (apptId, price) {
+  Modal.open(Modal.html('Pago de consulta', `
+    <div id="pay-alert"></div>
+    <div style="text-align:center;margin-bottom:1rem"><div class="text-sm text-muted">Total a pagar</div><div style="font-size:2rem;font-weight:800">$${(price || 0).toLocaleString('es-MX')}</div></div>
+    <div class="form-group"><label class="label">Número de tarjeta</label><input class="input" id="pay-card" placeholder="4242 4242 4242 4242" value="4242 4242 4242 4242"></div>
+    <div class="form-row">
+      <div class="form-group"><label class="label">Vencimiento</label><input class="input" id="pay-exp" placeholder="MM/AA" value="12/28"></div>
+      <div class="form-group"><label class="label">CVV</label><input class="input" id="pay-cvv" placeholder="123" value="123"></div>
+    </div>
+    <div class="text-xs text-muted" style="text-align:center">🔒 Pago simulado — no se realiza ningún cargo real.</div>
+  `, `<button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-primary" id="pay-btn" onclick="doPay(${apptId})">Pagar $${(price || 0).toLocaleString('es-MX')}</button>`));
+};
+window.doPay = async function (apptId) {
+  const btn = document.getElementById('pay-btn'); btn.disabled = true; btn.innerHTML = `<span class="inline-spinner"></span> Procesando…`;
+  try { await API.post(`/appointments/${apptId}/pay`, {}); Modal.close(); Toast.success('✓ Pago realizado con éxito'); renderPatientCitas(); }
+  catch (err) { document.getElementById('pay-alert').innerHTML = `<div class="alert alert-error">${escHtml(err.message)}</div>`; btn.disabled = false; btn.textContent = 'Pagar'; }
+};
+window.cancelAppointment = async function (apptId) {
+  if (!confirm('¿Cancelar esta cita?')) return;
+  try { await API.put(`/appointments/${apptId}`, { status: 'cancelled' }); Toast.info('Cita cancelada'); renderPatientCitas(); }
+  catch (err) { Toast.error(err.message); }
+};
+
+// Calificar médico -----------------------------------------------------------
+window.openReviewModal = function (apptId, doctorName) {
+  window._review = { rating: 5 };
+  Modal.open(Modal.html('Calificar a ' + doctorName, `
+    <div id="rv-alert"></div>
+    <div style="text-align:center;margin-bottom:1rem">
+      <div class="text-sm text-muted" style="margin-bottom:.5rem">Tu calificación</div>
+      <div id="rv-stars" style="font-size:2.25rem;letter-spacing:.25rem;cursor:pointer">${[1, 2, 3, 4, 5].map(n => `<span data-n="${n}" onclick="rvSet(${n})" style="color:#f59e0b">★</span>`).join('')}</div>
+    </div>
+    <div class="form-group"><label class="label">Comentario</label><textarea class="input" id="rv-comment" rows="3" placeholder="¿Cómo fue tu experiencia?"></textarea></div>
+  `, `<button class="btn btn-secondary" onclick="Modal.close()">Cancelar</button><button class="btn btn-primary" id="rv-btn" onclick="submitReview(${apptId})">Enviar calificación</button>`));
+};
+window.rvSet = function (n) {
+  window._review.rating = n;
+  document.querySelectorAll('#rv-stars span').forEach(s => { s.style.color = +s.dataset.n <= n ? '#f59e0b' : '#d1d5db'; });
+};
+window.submitReview = async function (apptId) {
+  const btn = document.getElementById('rv-btn'); btn.disabled = true; btn.innerHTML = `<span class="inline-spinner"></span> Enviando…`;
+  try { await API.post('/reviews', { appointmentId: apptId, rating: window._review.rating, comment: document.getElementById('rv-comment').value.trim() }); Modal.close(); Toast.success('¡Gracias por tu calificación!'); renderPatientCitas(); }
+  catch (err) { document.getElementById('rv-alert').innerHTML = `<div class="alert alert-error">${escHtml(err.message)}</div>`; btn.disabled = false; btn.textContent = 'Enviar calificación'; }
+};
+
+// Doctor: acciones de citas ---------------------------------------------------
+window.setApptStatus = async function (id, status) {
+  try { await API.put(`/appointments/${id}`, { status }); Toast.success('Cita actualizada'); renderDoctorAgenda(); }
+  catch (err) { Toast.error(err.message); }
+};
+
+// ============================================================
+// PAGE — DOCTOR AGENDA
+// ============================================================
+async function renderDoctorAgenda() {
+  Loading.show();
+  try {
+    const [me, appts] = await Promise.all([API.get('/auth/me'), API.get('/appointments')]);
+    State.setUser(me);
+    const av = (me.profile && me.profile.availability) || { days: [1, 2, 3, 4, 5], start: '09:00', end: '14:00', slotMin: 30 };
+    const price = (me.profile && me.profile.consultation_price) || 0;
+    const myInsurers = (me.profile && me.profile.accepted_insurers) || [];
+    const ALL_INSURERS = ['GNP', 'AXA', 'MetLife', 'Seguros Monterrey', 'IMSS', 'ISSSTE'];
+    const pending = appts.filter(a => a.status === 'pending');
+    const confirmed = appts.filter(a => a.status === 'confirmed').filter(a => new Date(a.datetime) >= Date.now() - 36e5);
+    const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+    const row = (a, actions) => `
+      <div class="card" style="padding:1rem 1.25rem;border:1px solid var(--color-border);display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+        <div style="display:flex;gap:.75rem;align-items:center">
+          <div class="header-avatar" style="width:38px;height:38px;font-size:.75rem">${initials(a.patient_first_name, a.patient_last_name)}</div>
+          <div>
+            <div class="font-semibold text-sm">${escHtml(a.patient_first_name)} ${escHtml(a.patient_last_name)}</div>
+            <div class="text-xs text-muted">${escHtml(a.record_number || '')} · ${escHtml(a.reason || '')}</div>
+            <div class="text-sm" style="margin-top:.125rem">📅 ${formatDateTime(a.datetime)} · <span class="${a.paid ? '' : 'text-muted'}">${a.paid ? '✓ Pagada' : 'Sin pagar'}</span></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">${actions}</div>
+      </div>`;
+
+    setContent(renderShell('/doctor/agenda', 'doctor', me, `
+      <div class="page-header">
+        <h2 class="page-title">Agenda</h2>
+        <p class="page-subtitle">Solicitudes de cita, horarios y precio de tu consulta</p>
+      </div>
+
+      <div class="card" style="margin-bottom:1.5rem">
+        <div class="card-header"><span class="card-title">Solicitudes pendientes ${pending.length ? `<span class="badge badge-yellow">${pending.length}</span>` : ''}</span></div>
+        <div class="card-body" style="display:flex;flex-direction:column;gap:.75rem">
+          ${pending.length ? pending.map(a => row(a, `
+            <button class="btn btn-primary btn-sm" onclick="setApptStatus(${a.id},'confirmed')">Confirmar</button>
+            <button class="btn btn-secondary btn-sm" onclick="setApptStatus(${a.id},'rejected')">Rechazar</button>`)).join('')
+        : `<div class="text-sm text-muted">No hay solicitudes pendientes.</div>`}
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:1.5rem">
+        <div class="card-header"><span class="card-title">Próximas citas confirmadas</span></div>
+        <div class="card-body" style="display:flex;flex-direction:column;gap:.75rem">
+          ${confirmed.length ? confirmed.map(a => row(a, `
+            <button class="btn btn-primary btn-sm" onclick="setApptStatus(${a.id},'completed')">Marcar completada</button>
+            <button class="btn btn-secondary btn-sm" onclick="setApptStatus(${a.id},'cancelled')">Cancelar</button>`)).join('')
+        : `<div class="text-sm text-muted">No tienes citas confirmadas próximas.</div>`}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">Mis horarios y precio</span></div>
+        <div class="card-body">
+          <div id="ag-alert"></div>
+          <label class="label">Días que atiendo</label>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem">
+            ${dayNames.map((n, i) => `<label style="display:flex;align-items:center;gap:.375rem;padding:.4375rem .75rem;border:1px solid var(--color-border);border-radius:8px;cursor:pointer"><input type="checkbox" class="ag-day" value="${i}" ${av.days.includes(i) ? 'checked' : ''}>${n}</label>`).join('')}
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label class="label">Hora inicio</label><input class="input" type="time" id="ag-start" value="${av.start}"></div>
+            <div class="form-group"><label class="label">Hora fin</label><input class="input" type="time" id="ag-end" value="${av.end}"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label class="label">Duración por cita</label>
+              <select class="select" id="ag-slot">${[15, 20, 30, 45, 60].map(x => `<option value="${x}"${x === av.slotMin ? ' selected' : ''}>${x} min</option>`).join('')}</select>
+            </div>
+            <div class="form-group"><label class="label">Precio de consulta (MXN)</label><input class="input" type="number" id="ag-price" min="0" step="50" value="${price}"></div>
+          </div>
+          <label class="label">Seguros que acepto</label>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem">
+            ${ALL_INSURERS.map(name => `<label style="display:flex;align-items:center;gap:.375rem;padding:.4375rem .75rem;border:1px solid var(--color-border);border-radius:8px;cursor:pointer"><input type="checkbox" class="ag-ins" value="${escHtml(name)}" ${myInsurers.includes(name) ? 'checked' : ''}>${escHtml(name)}</label>`).join('')}
+          </div>
+          <button class="btn btn-primary" id="ag-save" onclick="saveAgenda()">Guardar configuración</button>
+        </div>
+      </div>`));
+  } catch (err) {
+    Loading.hide();
+    if (err.status === 401) { State.clearAuth(); Router.navigate('/login'); return; }
+    Toast.error(err.message);
+  } finally { Loading.hide(); }
+}
+window.saveAgenda = async function () {
+  const days = Array.from(document.querySelectorAll('.ag-day:checked')).map(c => +c.value);
+  const acceptedInsurers = Array.from(document.querySelectorAll('.ag-ins:checked')).map(c => c.value);
+  const btn = document.getElementById('ag-save'); btn.disabled = true; btn.innerHTML = `<span class="inline-spinner"></span> Guardando…`;
+  try {
+    await API.put('/doctor/settings', {
+      consultationPrice: +document.getElementById('ag-price').value || 0,
+      availability: { days, start: document.getElementById('ag-start').value, end: document.getElementById('ag-end').value, slotMin: +document.getElementById('ag-slot').value },
+      acceptedInsurers,
+    });
+    Toast.success('Configuración guardada'); renderDoctorAgenda();
+  } catch (err) { document.getElementById('ag-alert').innerHTML = `<div class="alert alert-error">${escHtml(err.message)}</div>`; btn.disabled = false; btn.textContent = 'Guardar configuración'; }
+};
+
+// ============================================================
+// PAGE — DOCTOR GANANCIAS
+// ============================================================
+async function renderDoctorGanancias() {
+  Loading.show();
+  try {
+    const [me, e] = await Promise.all([API.get('/auth/me'), API.get('/dashboard/doctor/earnings')]);
+    State.setUser(me);
+    const max = Math.max(1, ...e.byMonth.map(m => m.total));
+    const money = (n) => '$' + (n || 0).toLocaleString('es-MX');
+
+    setContent(renderShell('/doctor/ganancias', 'doctor', me, `
+      <div class="page-header">
+        <h2 class="page-title">Ganancias</h2>
+        <p class="page-subtitle">Ingresos por consultas pagadas</p>
+      </div>
+
+      <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.5rem">
+        <div class="stat-card"><div class="stat-card__label">Total acumulado</div><div class="stat-card__value">${money(e.total)}</div><div class="stat-card__delta">${e.paidCount} consultas pagadas</div></div>
+        <div class="stat-card"><div class="stat-card__label">Este mes</div><div class="stat-card__value">${money(e.thisMonth)}</div></div>
+        <div class="stat-card"><div class="stat-card__label">Esta semana</div><div class="stat-card__value">${money(e.thisWeek)}</div></div>
+        <div class="stat-card stat-card--dark"><div class="stat-card__label">Precio actual</div><div class="stat-card__value">${money(e.consultationPrice)}</div><div class="stat-card__delta"><a onclick="Router.navigate('/doctor/agenda')" style="color:inherit;text-decoration:underline;cursor:pointer">Cambiar precio</a></div></div>
+      </div>
+
+      <div class="card" style="margin-bottom:1.5rem">
+        <div class="card-header"><span class="card-title">Ingresos últimos 6 meses</span></div>
+        <div class="card-body">
+          <div style="display:flex;align-items:flex-end;gap:1rem;height:180px;padding-top:1rem">
+            ${e.byMonth.map(m => `
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:.5rem;height:100%;justify-content:flex-end">
+                <div class="text-xs font-semibold">${m.total ? money(m.total) : ''}</div>
+                <div style="width:100%;max-width:48px;background:var(--color-primary);border-radius:6px 6px 0 0;height:${Math.max(2, (m.total / max) * 130)}px"></div>
+                <div class="text-xs text-muted" style="text-transform:capitalize">${m.label}</div>
+              </div>`).join('')}
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">Consultas cobradas</span></div>
+        ${e.recent.length ? `<div class="table-wrapper" style="border:none">
+          <table class="table"><thead><tr><th>Fecha</th><th>Paciente</th><th>Motivo</th><th style="text-align:right">Monto</th></tr></thead>
+          <tbody>${e.recent.map(r => `<tr><td class="text-sm text-muted">${formatDate(r.datetime)}</td><td class="text-sm font-semibold">${escHtml(r.patient_first_name)} ${escHtml(r.patient_last_name)}</td><td class="text-sm text-muted">${escHtml(r.reason || '')}</td><td class="text-sm font-semibold" style="text-align:right">${money(r.price)}</td></tr>`).join('')}</tbody></table>
+        </div>` : `<div class="card-body"><div class="text-sm text-muted">Aún no hay consultas cobradas.</div></div>`}
+      </div>`));
+  } catch (err) {
+    Loading.hide();
+    if (err.status === 401) { State.clearAuth(); Router.navigate('/login'); return; }
+    Toast.error(err.message);
+  } finally { Loading.hide(); }
+}
+
+// ============================================================
+// PAGE — DOCTOR EXPEDIENTES (lista de pacientes con expediente)
+// ============================================================
+async function renderDoctorExpedientes() {
+  Loading.show();
+  try {
+    const [me, patients] = await Promise.all([API.get('/auth/me'), API.get('/patients')]);
+    State.setUser(me);
+    setContent(renderShell('/doctor/expedientes', 'doctor', me, `
+      <div class="page-header">
+        <h2 class="page-title">Expedientes</h2>
+        <p class="page-subtitle">${patients.length} expediente${patients.length !== 1 ? 's' : ''} clínico${patients.length !== 1 ? 's' : ''}</p>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="search-wrapper" style="flex:1;max-width:380px">
+            <span class="search-icon">${iconSearch()}</span>
+            <input class="input" type="search" placeholder="Buscar por nombre, correo o expediente…" oninput="filterPatients(this.value)">
+          </div>
+        </div>
+        <div id="patients-table">${renderPatientsTable(patients)}</div>
+      </div>`));
+    window._allPatients = patients;
+  } catch (err) {
+    Loading.hide();
+    if (err.status === 401) { State.clearAuth(); Router.navigate('/login'); return; }
+    Toast.error(err.message);
+  } finally { Loading.hide(); }
+}
+
+// ============================================================
 // ROUTES
 // ============================================================
 Router.on('/',                    renderLanding);
@@ -2262,6 +2711,9 @@ Router.on('/patient/search',      renderPatientSearch);
 Router.on('/patient/citas',       renderPatientCitas);
 Router.on('/patient/favoritos',   renderPatientFavoritos);
 Router.on('/doctor/dashboard',    renderDoctorDashboard);
+Router.on('/doctor/agenda',       renderDoctorAgenda);
+Router.on('/doctor/ganancias',    renderDoctorGanancias);
+Router.on('/doctor/expedientes',  renderDoctorExpedientes);
 Router.on('/doctor/patients',     renderDoctorPatients);
 Router.on('/doctor/patient/:id',  (id) => renderDoctorPatientDetail(parseInt(id)));
 Router.on('/doctor/profile',      renderDoctorProfile);

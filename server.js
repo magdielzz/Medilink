@@ -156,6 +156,43 @@ db.exec(`
 `);
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
+// ─── Migraciones incrementales (columnas y tablas nuevas) ──────────────────
+function ensureColumn(table, col, def) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some(c => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+}
+ensureColumn('doctors', 'consultation_price', 'INTEGER DEFAULT 500');
+ensureColumn('doctors', 'availability', `TEXT DEFAULT '{"days":[1,2,3,4,5],"start":"09:00","end":"14:00","slotMin":30}'`);
+ensureColumn('doctors', 'accepted_insurers', `TEXT DEFAULT '[]'`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS appointments (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    patient_id      INTEGER NOT NULL REFERENCES patients(id),
+    doctor_id       INTEGER NOT NULL REFERENCES doctors(id),
+    datetime        DATETIME NOT NULL,
+    status          TEXT DEFAULT 'pending' CHECK(status IN ('pending','confirmed','completed','cancelled','rejected')),
+    reason          TEXT,
+    list_price      INTEGER DEFAULT 0,
+    covered         INTEGER DEFAULT 0,
+    price           INTEGER DEFAULT 0,
+    insurer         TEXT,
+    paid            INTEGER DEFAULT 0,
+    consultation_id INTEGER REFERENCES consultations(id),
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS reviews (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    appointment_id INTEGER REFERENCES appointments(id),
+    patient_id     INTEGER NOT NULL REFERENCES patients(id),
+    doctor_id      INTEGER NOT NULL REFERENCES doctors(id),
+    rating         INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+    comment        TEXT,
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -187,6 +224,71 @@ function generateRecordNumber() {
 
 function sanitizeStr(s) {
   return typeof s === 'string' ? s.trim() : s;
+}
+
+const INSURANCE_COVERAGE = 0.8; // el seguro cubre 80%; el paciente paga el copago
+
+// Orientador por palabras clave (prototipo, sin IA externa)
+function triage(symptoms) {
+  const t = (symptoms || '').toLowerCase();
+  const rules = [
+    { s: 'Neurología', k: ['cabeza', 'migrañ', 'migran', 'mareo', 'convuls', 'hormigueo', 'entumec', 'cefalea', 'desmay'] },
+    { s: 'Cardiología', k: ['corazón', 'corazon', 'pecho', 'palpit', 'presión', 'presion', 'hipertens', 'taquicard'] },
+    { s: 'Dermatología', k: ['piel', 'mancha', 'sarpullido', 'acné', 'acne', 'lunar', 'comezón', 'comezon', 'roncha'] },
+    { s: 'Pediatría', k: ['niño', 'nino', 'bebé', 'bebe', 'pediátr', 'pediatr', 'mi hijo', 'mi hija'] },
+    { s: 'Ginecología', k: ['embaraz', 'menstru', 'ginec', 'ovario', 'útero', 'utero', 'vaginal'] },
+    { s: 'Gastroenterología', k: ['estómago', 'estomago', 'digest', 'náusea', 'nausea', 'diarrea', 'gastr', 'abdomen', 'vómito', 'vomito', 'colon'] },
+    { s: 'Oftalmología', k: ['ojo', 'vista', 'visión', 'vision', 'ver borroso'] },
+    { s: 'Psiquiatría', k: ['ansiedad', 'depresión', 'depresion', 'ánimo', 'animo', 'insomnio', 'estrés', 'estres', 'triste', 'pánico', 'panico'] },
+    { s: 'Endocrinología', k: ['azúcar', 'azucar', 'diabet', 'tiroid', 'hormona', 'peso'] },
+    { s: 'Neumología', k: ['respir', 'tos', 'pulmón', 'pulmon', 'asma', 'ahogo', 'bronqui'] },
+    { s: 'Urología', k: ['orina', 'orinar', 'riñón', 'riñon', 'próstata', 'prostata', 'vejiga'] },
+    { s: 'Ortopedia', k: ['hueso', 'fractura', 'articul', 'rodilla', 'espalda', 'muscul', 'esguince', 'tobillo', 'columna'] },
+  ];
+  let specialty = 'Medicina General';
+  for (const r of rules) { if (r.k.some(w => t.includes(w))) { specialty = r.s; break; } }
+  const alta = ['intens', 'fuerte', 'sangr', 'desmay', 'no puedo respirar', 'dolor de pecho', 'urgente', 'grave'];
+  const media = ['frecuente', 'días', 'dias', 'semana', 'constante', 'repetid'];
+  let urgency = 'baja';
+  if (alta.some(w => t.includes(w))) urgency = 'alta';
+  else if (media.some(w => t.includes(w))) urgency = 'media';
+  const reason = specialty === 'Medicina General'
+    ? 'Por lo que describes, un médico general puede evaluarte y, si hace falta, canalizarte al especialista adecuado.'
+    : `Tus síntomas sugieren una valoración por ${specialty}. Un especialista podrá revisarte a detalle y orientar el siguiente paso.`;
+  return { specialty, reason, urgency };
+}
+
+// Genera horarios libres para los próximos N días según disponibilidad del médico
+function computeSlots(doctorId, av, days = 14) {
+  if (!av || !av.days || !av.days.length) return [];
+  const taken = new Set(db.prepare(`SELECT datetime FROM appointments WHERE doctor_id = ? AND status IN ('pending','confirmed')`).all(doctorId).map(r => new Date(r.datetime).getTime()));
+  const out = []; const now = Date.now();
+  for (let i = 0; i < days; i++) {
+    const day = new Date(); day.setDate(day.getDate() + i); day.setSeconds(0, 0);
+    if (!av.days.includes(day.getDay())) continue;
+    const [sh, sm] = av.start.split(':').map(Number); const [eh, em] = av.end.split(':').map(Number);
+    const daySlots = [];
+    for (let mins = sh * 60 + sm; mins + av.slotMin <= eh * 60 + em; mins += av.slotMin) {
+      const dt = new Date(day); dt.setHours(0, mins, 0, 0);
+      if (dt.getTime() <= now) continue;
+      if (taken.has(dt.getTime())) continue;
+      daySlots.push(dt.toISOString());
+    }
+    if (daySlots.length) out.push({ date: day.toISOString(), slots: daySlots });
+  }
+  return out;
+}
+
+// Permite editar expediente al médico O al propio paciente (sobre su expediente)
+function recordWriteGuard(req, res, next) {
+  if (req.user.role === 'doctor') return next();
+  const p = db.prepare('SELECT id FROM patients WHERE user_id = ?').get(req.user.id);
+  if (!p) return res.status(403).json({ error: 'Acceso no permitido' });
+  req.patientSelf = p.id;
+  next();
+}
+function patientOwnsItem(userId, table, itemId) {
+  return !!db.prepare(`SELECT 1 FROM ${table} t JOIN clinical_records cr ON cr.id = t.record_id JOIN patients p ON p.id = cr.patient_id WHERE t.id = ? AND p.user_id = ?`).get(itemId, userId);
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -342,14 +444,48 @@ app.get('/api/doctors', authenticate, (req, res) => {
   const q = `%${req.query.q || ''}%`;
   const rows = db.prepare(`
     SELECT d.id, u.first_name, u.last_name, u.email,
-           d.specialty, d.license_number, d.phone, d.hospital
+           d.specialty, d.license_number, d.phone, d.hospital,
+           d.consultation_price, d.accepted_insurers,
+           (SELECT ROUND(AVG(rating),1) FROM reviews r WHERE r.doctor_id = d.id) AS rating,
+           (SELECT COUNT(*)            FROM reviews r WHERE r.doctor_id = d.id) AS review_count
     FROM doctors d
     JOIN users u ON u.id = d.user_id
     WHERE u.first_name LIKE ? OR u.last_name LIKE ? OR d.specialty LIKE ? OR d.hospital LIKE ?
     ORDER BY u.last_name, u.first_name
     LIMIT 100
   `).all(q, q, q, q);
+  rows.forEach(r => { r.accepted_insurers = JSON.parse(r.accepted_insurers || '[]'); });
   res.json(rows);
+});
+
+app.get('/api/doctors/:id', authenticate, (req, res) => {
+  const d = db.prepare(`SELECT d.*, u.first_name, u.last_name, u.email FROM doctors d JOIN users u ON u.id = d.user_id WHERE d.id = ?`).get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Médico no encontrado' });
+  const rr = db.prepare('SELECT ROUND(AVG(rating),1) AS rating, COUNT(*) AS n FROM reviews WHERE doctor_id = ?').get(d.id);
+  const reviews = db.prepare(`SELECT r.*, u.first_name AS patient_first_name, u.last_name AS patient_last_name FROM reviews r JOIN patients p ON p.id = r.patient_id JOIN users u ON u.id = p.user_id WHERE r.doctor_id = ? ORDER BY r.created_at DESC`).all(d.id);
+  const availability = JSON.parse(d.availability || '{"days":[1,2,3,4,5],"start":"09:00","end":"14:00","slotMin":30}');
+  res.json({
+    id: d.id, first_name: d.first_name, last_name: d.last_name, email: d.email,
+    specialty: d.specialty, license_number: d.license_number, phone: d.phone, hospital: d.hospital,
+    consultation_price: d.consultation_price, accepted_insurers: JSON.parse(d.accepted_insurers || '[]'),
+    rating: rr.rating, review_count: rr.n, availability, reviews, slots: computeSlots(d.id, availability),
+  });
+});
+
+// ─── Configuración del médico: precio, disponibilidad y seguros ──────────
+app.put('/api/doctor/settings', authenticate, requireRole('doctor'), (req, res) => {
+  const d = db.prepare('SELECT id FROM doctors WHERE user_id = ?').get(req.user.id);
+  if (!d) return res.status(403).json({ error: 'Perfil de médico no encontrado' });
+  const { consultationPrice, availability, acceptedInsurers } = req.body;
+  if (consultationPrice !== undefined) db.prepare('UPDATE doctors SET consultation_price = ? WHERE id = ?').run(Math.max(0, parseInt(consultationPrice) || 0), d.id);
+  if (availability) db.prepare('UPDATE doctors SET availability = ? WHERE id = ?').run(JSON.stringify(availability), d.id);
+  if (acceptedInsurers) db.prepare('UPDATE doctors SET accepted_insurers = ? WHERE id = ?').run(JSON.stringify(acceptedInsurers), d.id);
+  res.json({ message: 'Configuración guardada' });
+});
+
+// ─── Orientador IA (palabras clave) ────────────────────────────
+app.post('/api/ai/triage', authenticate, (req, res) => {
+  res.json(triage(req.body.symptoms));
 });
 
 // ─── Patients ─────────────────────────────────────────────────────────────────
@@ -486,12 +622,12 @@ app.post('/api/consultations', authenticate, requireRole('doctor'), (req, res) =
 });
 
 // ─── Studies ──────────────────────────────────────────────────────────────────
-app.post('/api/studies', authenticate, requireRole('doctor'), (req, res) => {
+app.post('/api/studies', authenticate, recordWriteGuard, (req, res) => {
   const { patientId, type, name, date, result, status, notes } = req.body;
   if (!patientId || !type || !name) return res.status(400).json({ error: 'Paciente, tipo y nombre son requeridos' });
 
   const doctor = db.prepare('SELECT id FROM doctors WHERE user_id = ?').get(req.user.id);
-  const record = db.prepare('SELECT id FROM clinical_records WHERE patient_id = ?').get(patientId);
+  const record = db.prepare('SELECT id FROM clinical_records WHERE patient_id = ?').get(req.patientSelf || patientId);
   if (!record) return res.status(404).json({ error: 'Expediente no encontrado' });
 
   const r = db.prepare(
@@ -500,7 +636,8 @@ app.post('/api/studies', authenticate, requireRole('doctor'), (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, message: 'Estudio registrado' });
 });
 
-app.put('/api/studies/:id', authenticate, requireRole('doctor'), (req, res) => {
+app.put('/api/studies/:id', authenticate, recordWriteGuard, (req, res) => {
+  if (req.patientSelf && !patientOwnsItem(req.user.id, 'studies', req.params.id)) return res.status(403).json({ error: 'Acceso no permitido' });
   const { result, status, notes } = req.body;
   db.prepare('UPDATE studies SET result = ?, status = ?, notes = ? WHERE id = ?')
     .run(result||null, status||'pending', notes||null, req.params.id);
@@ -508,11 +645,11 @@ app.put('/api/studies/:id', authenticate, requireRole('doctor'), (req, res) => {
 });
 
 // ─── Allergies ────────────────────────────────────────────────────────────────
-app.post('/api/allergies', authenticate, requireRole('doctor'), (req, res) => {
+app.post('/api/allergies', authenticate, recordWriteGuard, (req, res) => {
   const { patientId, allergen, reaction, severity } = req.body;
   if (!patientId || !allergen) return res.status(400).json({ error: 'Paciente y alérgeno son requeridos' });
 
-  const record = db.prepare('SELECT id FROM clinical_records WHERE patient_id = ?').get(patientId);
+  const record = db.prepare('SELECT id FROM clinical_records WHERE patient_id = ?').get(req.patientSelf || patientId);
   if (!record) return res.status(404).json({ error: 'Expediente no encontrado' });
 
   const r = db.prepare(
@@ -521,17 +658,18 @@ app.post('/api/allergies', authenticate, requireRole('doctor'), (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, message: 'Alergia registrada' });
 });
 
-app.delete('/api/allergies/:id', authenticate, requireRole('doctor'), (req, res) => {
+app.delete('/api/allergies/:id', authenticate, recordWriteGuard, (req, res) => {
+  if (req.patientSelf && !patientOwnsItem(req.user.id, 'allergies', req.params.id)) return res.status(403).json({ error: 'Acceso no permitido' });
   db.prepare('DELETE FROM allergies WHERE id = ?').run(req.params.id);
   res.json({ message: 'Alergia eliminada' });
 });
 
 // ─── Conditions ───────────────────────────────────────────────────────────────
-app.post('/api/conditions', authenticate, requireRole('doctor'), (req, res) => {
+app.post('/api/conditions', authenticate, recordWriteGuard, (req, res) => {
   const { patientId, conditionName, diagnosedDate, status, treatment, notes } = req.body;
   if (!patientId || !conditionName) return res.status(400).json({ error: 'Paciente y condición son requeridos' });
 
-  const record = db.prepare('SELECT id FROM clinical_records WHERE patient_id = ?').get(patientId);
+  const record = db.prepare('SELECT id FROM clinical_records WHERE patient_id = ?').get(req.patientSelf || patientId);
   if (!record) return res.status(404).json({ error: 'Expediente no encontrado' });
 
   const r = db.prepare(
@@ -540,7 +678,8 @@ app.post('/api/conditions', authenticate, requireRole('doctor'), (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, message: 'Condición registrada' });
 });
 
-app.put('/api/conditions/:id', authenticate, requireRole('doctor'), (req, res) => {
+app.put('/api/conditions/:id', authenticate, recordWriteGuard, (req, res) => {
+  if (req.patientSelf && !patientOwnsItem(req.user.id, 'conditions', req.params.id)) return res.status(403).json({ error: 'Acceso no permitido' });
   const { status, treatment, notes } = req.body;
   db.prepare('UPDATE conditions SET status = ?, treatment = ?, notes = ? WHERE id = ?')
     .run(status||'active', treatment||null, notes||null, req.params.id);
@@ -548,13 +687,13 @@ app.put('/api/conditions/:id', authenticate, requireRole('doctor'), (req, res) =
 });
 
 // ─── Medications ──────────────────────────────────────────────────────────────
-app.post('/api/medications', authenticate, requireRole('doctor'), (req, res) => {
+app.post('/api/medications', authenticate, recordWriteGuard, (req, res) => {
   const { patientId, name, dosage, frequency, startDate, endDate, notes } = req.body;
   if (!patientId || !name || !dosage || !frequency)
     return res.status(400).json({ error: 'Paciente, nombre, dosis y frecuencia son requeridos' });
 
   const doctor = db.prepare('SELECT id FROM doctors WHERE user_id = ?').get(req.user.id);
-  const record = db.prepare('SELECT id FROM clinical_records WHERE patient_id = ?').get(patientId);
+  const record = db.prepare('SELECT id FROM clinical_records WHERE patient_id = ?').get(req.patientSelf || patientId);
   if (!record) return res.status(404).json({ error: 'Expediente no encontrado' });
 
   const r = db.prepare(
@@ -563,7 +702,8 @@ app.post('/api/medications', authenticate, requireRole('doctor'), (req, res) => 
   res.status(201).json({ id: r.lastInsertRowid, message: 'Medicamento registrado' });
 });
 
-app.put('/api/medications/:id', authenticate, requireRole('doctor'), (req, res) => {
+app.put('/api/medications/:id', authenticate, recordWriteGuard, (req, res) => {
+  if (req.patientSelf && !patientOwnsItem(req.user.id, 'medications', req.params.id)) return res.status(403).json({ error: 'Acceso no permitido' });
   const { active, endDate, notes } = req.body;
   db.prepare('UPDATE medications SET active = ?, end_date = ?, notes = ? WHERE id = ?')
     .run(active ? 1 : 0, endDate||null, notes||null, req.params.id);
@@ -617,6 +757,104 @@ app.get('/api/dashboard/patient', authenticate, requireRole('patient'), (req, re
 });
 
 // ─── SPA Fallback ─────────────────────────────────────────────────────────────
+// ─── Citas / Agenda ─────────────────────────────────────────
+app.post('/api/appointments', authenticate, requireRole('patient'), (req, res) => {
+  const { doctorId, datetime, reason } = req.body;
+  if (!doctorId || !datetime) return res.status(400).json({ error: 'Médico y fecha son requeridos' });
+  const patient = db.prepare('SELECT id, insurance_provider FROM patients WHERE user_id = ?').get(req.user.id);
+  if (!patient) return res.status(403).json({ error: 'Perfil de paciente no encontrado' });
+  const doctor = db.prepare('SELECT * FROM doctors WHERE id = ?').get(doctorId);
+  if (!doctor) return res.status(404).json({ error: 'Médico no encontrado' });
+  const when = new Date(datetime).toISOString();
+  const clash = db.prepare(`SELECT id FROM appointments WHERE doctor_id = ? AND status IN ('pending','confirmed') AND datetime = ?`).get(doctorId, when);
+  if (clash) return res.status(409).json({ error: 'Ese horario ya no está disponible' });
+  const list = doctor.consultation_price || 0;
+  const insurers = JSON.parse(doctor.accepted_insurers || '[]');
+  let covered = 0, insurer = null;
+  if (patient.insurance_provider && insurers.includes(patient.insurance_provider)) { insurer = patient.insurance_provider; covered = Math.round(list * INSURANCE_COVERAGE); }
+  const r = db.prepare(`INSERT INTO appointments (patient_id, doctor_id, datetime, status, reason, list_price, covered, price, insurer, paid) VALUES (?,?,?,'pending',?,?,?,?,?,0)`)
+    .run(patient.id, doctorId, when, reason || 'Consulta', list, covered, list - covered, insurer);
+  res.status(201).json({ id: r.lastInsertRowid, message: 'Cita solicitada' });
+});
+
+app.get('/api/appointments', authenticate, (req, res) => {
+  if (req.user.role === 'patient') {
+    const p = db.prepare('SELECT id FROM patients WHERE user_id = ?').get(req.user.id);
+    const rows = db.prepare(`
+      SELECT a.*, u.first_name AS doctor_first_name, u.last_name AS doctor_last_name, d.specialty, d.hospital,
+             (SELECT COUNT(*) FROM reviews r WHERE r.appointment_id = a.id) AS has_review
+      FROM appointments a JOIN doctors d ON d.id = a.doctor_id JOIN users u ON u.id = d.user_id
+      WHERE a.patient_id = ? ORDER BY a.datetime`).all(p.id);
+    rows.forEach(r => { r.hasReview = !!r.has_review; });
+    return res.json(rows);
+  }
+  const d = db.prepare('SELECT id FROM doctors WHERE user_id = ?').get(req.user.id);
+  if (!d) return res.status(403).json({ error: 'Perfil de médico no encontrado' });
+  const rows = db.prepare(`
+    SELECT a.*, u.first_name AS patient_first_name, u.last_name AS patient_last_name, p.id AS patient_id, cr.record_number
+    FROM appointments a JOIN patients p ON p.id = a.patient_id JOIN users u ON u.id = p.user_id
+    LEFT JOIN clinical_records cr ON cr.patient_id = p.id
+    WHERE a.doctor_id = ? ORDER BY a.datetime`).all(d.id);
+  res.json(rows);
+});
+
+app.put('/api/appointments/:id', authenticate, (req, res) => {
+  const { status } = req.body;
+  if (!['confirmed', 'rejected', 'cancelled', 'completed'].includes(status)) return res.status(400).json({ error: 'Estado inválido' });
+  const appt = db.prepare('SELECT * FROM appointments WHERE id = ?').get(req.params.id);
+  if (!appt) return res.status(404).json({ error: 'Cita no encontrada' });
+  db.transaction(() => {
+    db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run(status, appt.id);
+    if (status === 'completed' && !appt.consultation_id) {
+      const rec = db.prepare('SELECT id FROM clinical_records WHERE patient_id = ?').get(appt.patient_id);
+      if (rec) {
+        const c = db.prepare(`INSERT INTO consultations (record_id, doctor_id, date, reason, notes) VALUES (?,?,?,?,?)`)
+          .run(rec.id, appt.doctor_id, appt.datetime, appt.reason || 'Consulta', 'Generada al completar la cita');
+        db.prepare('UPDATE appointments SET consultation_id = ? WHERE id = ?').run(c.lastInsertRowid, appt.id);
+      }
+    }
+  })();
+  res.json({ message: 'Cita actualizada' });
+});
+
+app.post('/api/appointments/:id/pay', authenticate, (req, res) => {
+  const r = db.prepare('UPDATE appointments SET paid = 1 WHERE id = ?').run(req.params.id);
+  if (!r.changes) return res.status(404).json({ error: 'Cita no encontrada' });
+  res.json({ message: 'Pago realizado' });
+});
+
+// ─── Reseñas / Calificaciones ──────────────────────────────────
+app.post('/api/reviews', authenticate, requireRole('patient'), (req, res) => {
+  const { appointmentId, rating, comment } = req.body;
+  const p = db.prepare('SELECT id FROM patients WHERE user_id = ?').get(req.user.id);
+  const appt = db.prepare('SELECT * FROM appointments WHERE id = ?').get(appointmentId);
+  if (!appt || appt.patient_id !== p.id) return res.status(404).json({ error: 'Cita no encontrada' });
+  if (appt.status !== 'completed') return res.status(400).json({ error: 'Solo puedes calificar consultas completadas' });
+  if (db.prepare('SELECT id FROM reviews WHERE appointment_id = ?').get(appt.id)) return res.status(409).json({ error: 'Ya calificaste esta consulta' });
+  const rt = Math.max(1, Math.min(5, parseInt(rating) || 5));
+  const r = db.prepare('INSERT INTO reviews (appointment_id, patient_id, doctor_id, rating, comment) VALUES (?,?,?,?,?)')
+    .run(appt.id, p.id, appt.doctor_id, rt, comment || null);
+  res.status(201).json({ id: r.lastInsertRowid, message: '¡Gracias por tu calificación!' });
+});
+
+// ─── Ganancias del médico ───────────────────────────────────
+app.get('/api/dashboard/doctor/earnings', authenticate, requireRole('doctor'), (req, res) => {
+  const d = db.prepare('SELECT id, consultation_price FROM doctors WHERE user_id = ?').get(req.user.id);
+  if (!d) return res.status(404).json({ error: 'Perfil de médico no encontrado' });
+  const paid = db.prepare(`SELECT a.*, u.first_name AS patient_first_name, u.last_name AS patient_last_name FROM appointments a JOIN patients p ON p.id = a.patient_id JOIN users u ON u.id = p.user_id WHERE a.doctor_id = ? AND a.paid = 1`).all(d.id);
+  const income = a => (a.list_price != null ? a.list_price : a.price) || 0;
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay());
+  const sum = arr => arr.reduce((s, a) => s + income(a), 0);
+  const byMonthMap = {};
+  paid.forEach(a => { const dt = new Date(a.datetime); const k = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0'); byMonthMap[k] = (byMonthMap[k] || 0) + income(a); });
+  const byMonth = [];
+  for (let i = 5; i >= 0; i--) { const dt = new Date(now.getFullYear(), now.getMonth() - i, 1); const k = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0'); byMonth.push({ label: dt.toLocaleDateString('es-MX', { month: 'short' }), total: byMonthMap[k] || 0 }); }
+  const recent = paid.slice().sort((a, b) => new Date(b.datetime) - new Date(a.datetime)).slice(0, 12).map(a => ({ id: a.id, datetime: a.datetime, price: income(a), covered: a.covered || 0, insurer: a.insurer, reason: a.reason, patient_first_name: a.patient_first_name, patient_last_name: a.patient_last_name }));
+  res.json({ total: sum(paid), thisMonth: sum(paid.filter(a => new Date(a.datetime) >= monthStart)), thisWeek: sum(paid.filter(a => new Date(a.datetime) >= weekStart)), paidCount: paid.length, consultationPrice: d.consultation_price, byMonth, recent });
+});
+
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Ruta no encontrada' });
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
